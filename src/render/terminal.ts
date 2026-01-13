@@ -28,7 +28,7 @@ const renderHunk = (
   while (index < hunkLines.length) {
     const fold = foldMap.get(index);
     if (fold) {
-      output.push(faint(fold.summary));
+      output.push(faint(` ${fold.summary}`));
       index = fold.endIndex + 1;
       continue;
     }

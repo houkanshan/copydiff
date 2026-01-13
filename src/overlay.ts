@@ -149,7 +149,7 @@ const computeFoldSegments = (hunk: Hunk, options: OverlayOptions): FoldSegment[]
     }
     if (runLines.length >= options.minFoldLines) {
       const similarity = Math.min(...runLines.map((line) => line.copyTag?.similarity ?? 0));
-      const summary = `↳ (collapsed) ${runLines.length} added lines copied from ${summarizeSources(runLines)} (${Math.round(
+      const summary = `-> (collapsed) ${runLines.length} added lines copied from ${summarizeSources(runLines)} (${Math.round(
         similarity * 100
       )}%)`;
       segments.push({ startIndex: runStart, endIndex, summary });
