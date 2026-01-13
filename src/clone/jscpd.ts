@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 import { spawn } from "bun";
@@ -18,8 +18,66 @@ type JscpdRunOptions = {
   repoRoot: string;
   ignore: string[];
   minLines: number;
+  minTokens: number;
+  pattern?: string;
   cache: boolean;
   verbose: boolean;
+};
+
+type JscpdCacheOptionsInput = JscpdRunOptions & {
+  scanScope: "all" | "changed-types";
+  scanPattern?: string;
+  jscpdVersion?: string;
+};
+
+const normalizeClonePath = (repoRoot: string, filePath: string): string => {
+  const normalized = filePath.replace(/\\/g, "/");
+  if (!path.isAbsolute(filePath)) {
+    return normalized;
+  }
+  const resolvedRoot = path.resolve(repoRoot);
+  const resolvedFile = path.resolve(filePath);
+  if (resolvedFile.startsWith(`${resolvedRoot}${path.sep}`)) {
+    return path.relative(resolvedRoot, resolvedFile).split(path.sep).join("/");
+  }
+  return normalized;
+};
+
+const logVerbose = (options: JscpdRunOptions, message: string): void => {
+  if (options.verbose) {
+    process.stderr.write(`[copydiff] ${message}\n`);
+  }
+};
+
+const streamToText = async (
+  stream: ReadableStream<Uint8Array> | null,
+  onChunk?: (chunk: string) => void
+): Promise<string> => {
+  if (!stream) {
+    return "";
+  }
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    const chunkText = decoder.decode(value, { stream: true });
+    text += chunkText;
+    if (onChunk && chunkText) {
+      onChunk(chunkText);
+    }
+  }
+  const tail = decoder.decode();
+  if (tail) {
+    text += tail;
+    if (onChunk) {
+      onChunk(tail);
+    }
+  }
+  return text;
 };
 
 const normalizeClonePairs = (payload: unknown): ClonePair[] => {
@@ -91,6 +149,17 @@ const resolveReportPath = async (outputDir: string): Promise<string | undefined>
 
 const runJscpd = async (options: JscpdRunOptions): Promise<ClonePair[]> => {
   const outputDir = await getTempDir();
+  const localBin = path.join(
+    options.repoRoot,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "jscpd.cmd" : "jscpd"
+  );
+  try {
+    await access(localBin);
+  } catch {
+    logVerbose(options, "jscpd not found in node_modules; bunx may download it");
+  }
   const args = [
     "jscpd",
     "--reporters",
@@ -99,30 +168,61 @@ const runJscpd = async (options: JscpdRunOptions): Promise<ClonePair[]> => {
     outputDir,
     "--min-lines",
     options.minLines.toString(),
-    "--absolute"
+    "--min-tokens",
+    options.minTokens.toString(),
+    "--absolute",
+    "--gitignore"
   ];
+
+  if (options.pattern) {
+    args.push("--pattern", options.pattern);
+  }
 
   if (options.ignore.length > 0) {
     args.push("--ignore", options.ignore.join(","));
   }
 
+  args.push(".");
+  logVerbose(options, `running bunx ${args.join(" ")}`);
   const proc = spawn(["bunx", ...args], {
     cwd: options.repoRoot,
     stdout: "pipe",
     stderr: "pipe"
   });
-  const stdoutText = await new Response(proc.stdout).text();
-  const stderrText = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
+  const startTime = Date.now();
+  let slowTimer: ReturnType<typeof setTimeout> | undefined;
   if (options.verbose) {
-    if (stdoutText.trim()) {
-      process.stdout.write(stdoutText);
+    slowTimer = setTimeout(() => {
+      process.stderr.write("[copydiff] jscpd still running after 60s\n");
+    }, 60000);
+  }
+  let stdoutText = "";
+  let stderrText = "";
+  let exitCode = 0;
+  try {
+    if (options.verbose) {
+      const logChunk = (chunk: string) => {
+        process.stderr.write(chunk);
+      };
+      [stdoutText, stderrText, exitCode] = await Promise.all([
+        streamToText(proc.stdout, logChunk),
+        streamToText(proc.stderr, logChunk),
+        proc.exited
+      ]);
+    } else {
+      [stdoutText, stderrText, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited
+      ]);
     }
-    if (stderrText.trim()) {
-      process.stderr.write(stderrText);
+  } finally {
+    if (slowTimer) {
+      clearTimeout(slowTimer);
     }
   }
+
+  logVerbose(options, `jscpd completed in ${Math.round((Date.now() - startTime) / 1000)}s`);
 
   if (exitCode !== 0) {
     await rm(outputDir, { recursive: true, force: true });
@@ -137,14 +237,22 @@ const runJscpd = async (options: JscpdRunOptions): Promise<ClonePair[]> => {
   const data = await readFile(reportPath, "utf8");
   const payload = JSON.parse(data) as unknown;
   await rm(outputDir, { recursive: true, force: true });
-  return normalizeClonePairs(payload);
+  return normalizeClonePairs(payload).map((pair) => ({
+    a: { ...pair.a, file: normalizeClonePath(options.repoRoot, pair.a.file) },
+    b: { ...pair.b, file: normalizeClonePath(options.repoRoot, pair.b.file) },
+    similarity: pair.similarity
+  }));
 };
 
-const buildCacheOptions = (options: JscpdRunOptions & { jscpdVersion?: string }): CacheOptions => ({
+const buildCacheOptions = (options: JscpdCacheOptionsInput): CacheOptions => ({
   ignore: options.ignore,
   minLines: options.minLines,
+  minTokens: options.minTokens,
+  scanScope: options.scanScope,
+  scanPaths: options.scanPaths,
+  scanPattern: options.scanPattern,
   jscpdVersion: options.jscpdVersion
 });
 
-export { buildCacheOptions, runJscpd };
+export { buildCacheOptions, normalizeClonePath, runJscpd };
 export type { ClonePair, CloneRegion, JscpdRunOptions };

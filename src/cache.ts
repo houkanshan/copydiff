@@ -7,6 +7,9 @@ import type { ClonePair } from "./clone/jscpd";
 type CacheOptions = {
   ignore: string[];
   minLines: number;
+  minTokens: number;
+  scanScope: "all" | "changed-types";
+  scanPattern?: string;
   jscpdVersion?: string;
 };
 

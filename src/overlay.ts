@@ -14,12 +14,25 @@ type CopyOverlay = {
   files: FileDiff[];
 };
 
+const stripDiffPrefix = (file: string): string | undefined => {
+  if (file === "/dev/null") {
+    return undefined;
+  }
+  if (file.length > 2 && file[1] === "/" && /[abciow]/.test(file[0])) {
+    return file.slice(2);
+  }
+  return file;
+};
+
 const buildAddedLineIndex = (files: FileDiff[]): { index: AddedLineIndex; intervals: AddedIntervals } => {
   const index: AddedLineIndex = new Map();
   const intervals: AddedIntervals = new Map();
 
   files.forEach((file) => {
-    const fileKey = file.toFile.replace(/^b\//, "");
+    const fileKey = stripDiffPrefix(file.toFile);
+    if (!fileKey) {
+      return;
+    }
     const lineMap = new Map<number, DiffLine>();
     const fileIntervals: Array<{ start: number; end: number }> = [];
 
@@ -63,7 +76,11 @@ const intersects = (region: CloneRegion, interval: { start: number; end: number 
   region.startLine <= interval.end && region.endLine >= interval.start;
 
 const regionIntersectsIntervals = (region: CloneRegion, intervals: AddedIntervals): boolean => {
-  const fileIntervals = intervals.get(region.file.replace(/^b\//, ""));
+  const fileKey = stripDiffPrefix(region.file);
+  if (!fileKey) {
+    return false;
+  }
+  const fileIntervals = intervals.get(fileKey);
   if (!fileIntervals) {
     return false;
   }
@@ -77,7 +94,10 @@ const applyCopyTag = (
   similarity: number,
   allowFold: boolean
 ): void => {
-  const fileKey = region.file.replace(/^b\//, "");
+  const fileKey = stripDiffPrefix(region.file);
+  if (!fileKey) {
+    return;
+  }
   const lineMap = addedIndex.get(fileKey);
   if (!lineMap) {
     return;

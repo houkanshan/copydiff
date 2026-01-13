@@ -27,13 +27,18 @@ copydiff base..head
 - `--stdin` read diff from stdin.
 - `--html <path>` write a light-mode HTML diff.
 - `--no-fold-pure` disable folding for pure copies.
+- `--copy-color <spec>` set copy highlight color using git color syntax (defaults to `color.diff.newMoved`).
+- `--no-copy-color` disable copy highlighting.
 - `--pure-threshold <0..1>` similarity threshold for pure copies (default `0.98`).
 - `--min-fold-lines <n>` minimum lines to fold (default `12`).
 - `--min-lines <n>` minimum lines for `jscpd` (default `8`).
+- `--min-tokens <n>` minimum tokens for `jscpd` (default `min-lines * 2`).
 - `--ignore <glob,glob>` ignored globs for `jscpd`.
 - `--cache <on|off>` enable clone cache (default `on`).
 - `--verbose` log `jscpd` output.
 - `--diff-config <force|respect>` set git diff config mode for wrapper mode (default `force`).
+- `--scan-scope <all|changed-types>` scan the whole repo (`all`, default) or only files with extensions present in the diff (`changed-types`).
+Note: `.gitignore` is always honored for clone scanning.
 
 ## Exit codes
 
