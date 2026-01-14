@@ -35,6 +35,11 @@ type CopyRun = {
   sourceEndLine: number;
 };
 
+type CopyDetail = {
+  summaryText: string;
+  bodyHtml: string;
+};
+
 const themeName = "github-light";
 const defaultLanguage = "text";
 const defaultCopyAccent = "#0969da";
@@ -151,6 +156,16 @@ const resolveLanguage = (file: FileDiff): string => {
     return byName;
   }
   const ext = path.extname(candidate).toLowerCase();
+  return extensionLanguageMap[ext] ?? defaultLanguage;
+};
+
+const resolveLanguageForPath = (filePath: string): string => {
+  const base = path.basename(filePath);
+  const byName = filenameLanguageMap[base];
+  if (byName) {
+    return byName;
+  }
+  const ext = path.extname(filePath).toLowerCase();
   return extensionLanguageMap[ext] ?? defaultLanguage;
 };
 
@@ -638,11 +653,11 @@ const buildCopyRuns = (lines: DiffLine[]): CopyRun[] => {
   return runs;
 };
 
-const renderCopySourceBlock = async (
+const buildCopyDetail = async (
   run: CopyRun,
   options: HtmlRenderOptions,
   sourceCache: SourceFileCache
-): Promise<string> => {
+): Promise<CopyDetail> => {
   const sourceLabel = `${run.source.file}:${run.sourceStartLine}-${run.sourceEndLine}`;
   const similarity = Math.round(run.similarity * 100);
   const summaryText = `copied from ${sourceLabel} (${similarity}%)`;
@@ -655,19 +670,24 @@ const renderCopySourceBlock = async (
       const end = Math.min(run.sourceEndLine, lines.length);
       if (start <= end) {
         const snippet = lines.slice(start - 1, end);
-        const rendered = snippet.map((line) => {
-          const content = escapeHtml(line);
-          return `<span class="line copy-source-line"><span class="marker">|</span>${content}</span>`;
-        });
+        const lang = resolveLanguageForPath(run.source.file);
+        const highlighted = await highlightLines(snippet, lang, options.debug, run.source.file);
+        const rendered = highlighted.map(
+          (content) => `<span class="line copy-source-line">${content}</span>`
+        );
         body = rendered.join("\n");
       }
     }
   }
   if (!body) {
-    body =
-      "<span class=\"line copy-source-line copy-source-missing\"><span class=\"marker\">!</span>source unavailable</span>";
+    body = "<span class=\"line copy-source-line copy-source-missing\">source unavailable</span>";
   }
-  return `<details class="copy-source"><summary><span class="marker"> </span>${escapeHtml(summaryText)}</summary>${body}</details>`;
+  return { summaryText, bodyHtml: body };
+};
+
+const renderCopyPanel = (panelId: string, detail: CopyDetail): string => {
+  const summary = `<summary class="copy-panel-summary">${escapeHtml(detail.summaryText)}</summary>`;
+  return `<details class="copy-panel" id="${panelId}">${summary}<div class="copy-panel-body">${detail.bodyHtml}</div></details>`;
 };
 
 const buildCopyInlineHighlightMap = async (
@@ -759,7 +779,8 @@ ${buildAnsiPalette()}
   --meta-text: #57606a;
   --add-bg: #dafbe1;
   --del-bg: #ffebe8;
-  --ctx-bg: #f8f9fb;
+  --copied-bg: #e6f7ff;
+  --ctx-bg: #ffffff;
   --marker-add: #1a7f37;
   --marker-del: #cf222e;
   --marker-ctx: #57606a;
@@ -773,8 +794,11 @@ ${buildAnsiPalette()}
 body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background: var(--bg); color: var(--text); margin: 0; }
 header { padding: 16px 20px; border-bottom: 1px solid #d0d7de; background: #f8f9fb; }
 main { padding: 16px 20px; }
-pre { margin: 0; font-size: 13px; line-height: 1; white-space: normal; }
-.line { display: block; white-space: pre; padding-left: 4px; padding-right: 12px; }
+.diff-grid { font-size: 13px; line-height: 1.5; }
+.diff-row { position: relative; --info-gap: 18px; --info-width: clamp(260px, 34%, 420px); padding-right: calc(var(--info-width) + var(--info-gap)); }
+.diff-cell { min-width: 0; }
+.info-cell { position: absolute; top: 0; right: 0; width: var(--info-width); z-index: 1; }
+.line { display: block; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; padding-left: 4px; padding-right: 12px; }
 .line.meta { background: var(--meta-bg); color: var(--meta-text); font-weight: 600; }
 .line.add { background: var(--add-bg); }
 .line.del { background: var(--del-bg); }
@@ -784,40 +808,52 @@ pre { margin: 0; font-size: 13px; line-height: 1; white-space: normal; }
 .line.add .marker { color: var(--marker-add); }
 .line.del .marker { color: var(--marker-del); }
 .line.context .marker { color: var(--marker-ctx); }
-.line.copied { box-shadow: inset 3px 0 0 var(--copy-accent); }
+.line.copied { background: var(--copied-bg); }
 .line.copy-accent { box-shadow: inset 3px 0 0 var(--copy-accent); }
 .inline-change { border-radius: 2px; padding: 0 1px; }
 .inline-add { background: var(--inline-add-bg); }
 .inline-del { background: var(--inline-del-bg); }
 .inline-copy { background: var(--inline-copy-bg); }
 .pure-copy { display: block; margin: 0; }
-.pure-copy summary { opacity: 0.75; cursor: pointer; list-style: none; color: var(--meta-text); background: #eef2f6; padding-left: 4px; }
+.pure-copy summary { cursor: pointer; list-style: none; margin: 0; padding: 0; }
 .pure-copy summary::-webkit-details-marker { display: none; }
-.copy-source { display: block; margin: 0; }
-.copy-source summary { cursor: pointer; list-style: none; color: var(--meta-text); background: var(--copy-meta-bg); padding-left: 4px; font-weight: 600; }
-.copy-source summary::-webkit-details-marker { display: none; }
-.copy-source summary .marker { color: var(--marker-ctx); }
+.pure-copy summary::marker { content: ""; }
+.line.fold-summary { background: #eef2f6; color: var(--meta-text); font-weight: 600; }
+.copy-panel { border: 1px solid #d0d7de; border-radius: 6px; background: #ffffff; margin-bottom: 12px; overflow: hidden; }
+.copy-panel-summary { cursor: pointer; list-style: none; margin: 0; padding: 6px 8px; background: var(--copy-meta-bg); color: var(--meta-text); font-weight: 600; display: block; font-size: inherit; line-height: inherit; }
+.copy-panel-summary::-webkit-details-marker { display: none; }
+.copy-panel-summary::marker { content: ""; }
+.copy-panel-body { padding: 4px 0; }
+.copy-panel-body .line { padding-left: 8px; padding-right: 8px; }
 .line.copy-source-line { background: var(--copy-source-bg); color: var(--text); }
 .line.copy-source-line .marker { color: var(--marker-ctx); }
 .copy-source-missing { font-style: italic; }
 .legend { font-size: 12px; color: #57606a; }
+@media (max-width: 960px) {
+  .diff-row { padding-right: 0; }
+  .info-cell { position: static; width: auto; padding-top: 8px; }
+  .info-cell:empty { display: none; padding-top: 0; }
+}
 </style>
 </head>
 <body>
 <header>
   <strong>copydiff</strong>
-  <div class="legend">Syntax highlighting enabled when available. Copied lines show their source; expand for original code. Pure copy blocks are collapsed.</div>
+  <div class="legend">Syntax highlighting enabled when available. Copied source details appear next to their matching additions. Pure copy blocks are collapsed.</div>
 </header>
 <main>
-<pre>`;
+  <div class="diff-grid">`;
 
-const buildHtmlFooter = (): string => `</pre>
+const buildHtmlFooter = (): string => `</div>
 </main>
 </body>
 </html>`;
 
 const renderMetaLine = (line: DiffLine): string =>
   `<span class="line meta">${escapeHtml(line.plain)}</span>`;
+
+const renderFoldSummaryLine = (summary: string): string =>
+  `<summary class="line meta fold-summary"><span class="marker"> </span>${escapeHtml(summary)}</summary>`;
 
 const renderDiffLine = (
   line: DiffLine,
@@ -843,17 +879,39 @@ const renderDiffLine = (
 
 type FoldSegmentMap = Map<number, { endIndex: number; summary: string }>;
 
+const renderRow = (diffHtml: string, panelHtml?: string): string =>
+  `<div class="diff-row"><div class="diff-cell">${diffHtml}</div><div class="info-cell">${panelHtml ?? ""}</div></div>`;
+
 const renderHunk = async (
   lines: DiffLine[],
   foldSegments: FoldSegmentMap,
   options: HtmlRenderOptions,
   lang: string,
-  copyAccent?: string,
-  fileLabel?: string,
+  copyAccent: string | undefined,
+  fileLabel: string | undefined,
+  panelPrefix: string,
   sourceCache: SourceFileCache
 ): Promise<string> => {
   const inlineHighlightMap = buildInlineHighlightMap(lines);
   const copyInlineHighlightMap = await buildCopyInlineHighlightMap(lines, inlineHighlightMap, options, sourceCache);
+  const copyRuns = buildCopyRuns(lines);
+  const foldRanges = Array.from(foldSegments.entries()).map(([startIndex, segment]) => ({
+    startIndex,
+    endIndex: segment.endIndex
+  }));
+  const isFoldedRun = (run: CopyRun): boolean =>
+    foldRanges.some((range) => run.startIndex >= range.startIndex && run.endIndex <= range.endIndex);
+  const copyRunPanels = new Map<number, string>();
+  let panelIndex = 0;
+  for (const run of copyRuns) {
+    if (isFoldedRun(run)) {
+      continue;
+    }
+    const detail = await buildCopyDetail(run, options, sourceCache);
+    const panelId = `${panelPrefix}-${panelIndex}`;
+    panelIndex += 1;
+    copyRunPanels.set(run.startIndex, renderCopyPanel(panelId, detail));
+  }
   const codeLines = lines
     .filter((line) => line.kind === "add" || line.kind === "del" || line.kind === "context")
     .map((line) => line.plain.slice(1));
@@ -875,46 +933,25 @@ const renderHunk = async (
       codeIndex += 1;
       const accent = options.copyColor ? copyAccent ?? defaultCopyAccent : undefined;
       const moved = line.hasBgAnsi || hasFaintAnsi(line.rawAnsi);
-      return renderDiffLine(line, content, accent, moved);
+      const lineHtml = renderDiffLine(line, content, accent, moved);
+      return lineHtml;
     }
     return renderMetaLine(line);
   });
-
-  const copyBlocks = new Map<number, string>();
-  const copyRuns = buildCopyRuns(lines);
-  for (const run of copyRuns) {
-    copyBlocks.set(run.startIndex, await renderCopySourceBlock(run, options, sourceCache));
-  }
-
-  const renderRange = (startIndex: number, endIndex: number): string => {
-    const output: string[] = [];
-    for (let i = startIndex; i <= endIndex; i += 1) {
-      const copyBlock = copyBlocks.get(i);
-      if (copyBlock) {
-        output.push(copyBlock);
-      }
-      output.push(renderedLines[i]);
-    }
-    return output.join("\n");
-  };
 
   const output: string[] = [];
   let index = 0;
   while (index < lines.length) {
     const fold = foldSegments.get(index);
     if (fold) {
-      const foldedLines = renderRange(index, fold.endIndex);
-      output.push(
-        `<details class="pure-copy"><summary>${escapeHtml(fold.summary)}</summary>${foldedLines}</details>`
-      );
+      const foldedLines = renderedLines.slice(index, fold.endIndex + 1).join("\n");
+      const diffHtml = `<details class="pure-copy">${renderFoldSummaryLine(fold.summary)}${foldedLines}</details>`;
+      output.push(renderRow(diffHtml));
       index = fold.endIndex + 1;
       continue;
     }
-    const copyBlock = copyBlocks.get(index);
-    if (copyBlock) {
-      output.push(copyBlock);
-    }
-    output.push(renderedLines[index]);
+    const panelHtml = copyRunPanels.get(index);
+    output.push(renderRow(renderedLines[index], panelHtml));
     index += 1;
   }
   return output.join("\n");
@@ -924,17 +961,27 @@ const renderHtml = async (files: FileDiff[], options: HtmlRenderOptions): Promis
   const copyAccent = extractCopyAccent(options.copyColor);
   const sourceCache: SourceFileCache = new Map();
   const content: string[] = [buildHtmlHead(options, copyAccent)];
-  for (const file of files) {
+  for (const [fileIndex, file] of files.entries()) {
     const lang = resolveLanguage(file);
     const fileLabel = stripDiffPrefix(file.toFile) ?? stripDiffPrefix(file.fromFile);
-    file.headerLines.forEach((line) => content.push(renderMetaLine(line)));
-    for (const hunk of file.hunks) {
-      content.push(renderMetaLine(hunk.headerLine));
+    file.headerLines.forEach((line) => content.push(renderRow(renderMetaLine(line))));
+    for (const [hunkIndex, hunk] of file.hunks.entries()) {
+      content.push(renderRow(renderMetaLine(hunk.headerLine)));
       const foldMap: FoldSegmentMap = new Map();
       hunk.foldSegments.forEach((segment) => {
         foldMap.set(segment.startIndex, { endIndex: segment.endIndex, summary: segment.summary });
       });
-      content.push(await renderHunk(hunk.lines, foldMap, options, lang, copyAccent, fileLabel, sourceCache));
+      const rendered = await renderHunk(
+        hunk.lines,
+        foldMap,
+        options,
+        lang,
+        copyAccent,
+        fileLabel,
+        `copy-${fileIndex}-${hunkIndex}`,
+        sourceCache
+      );
+      content.push(rendered);
     }
   }
   content.push(buildHtmlFooter());

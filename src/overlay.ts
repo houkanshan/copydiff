@@ -14,6 +14,12 @@ type CopyOverlay = {
   files: FileDiff[];
 };
 
+const minCopyLines = 2;
+const minCopyLineChars = 8;
+const shortCopyLineChars = 12;
+const minCopyNonWhitespaceChars = 16;
+const minCopyWordTokens = 2;
+
 const stripDiffPrefix = (file: string): string | undefined => {
   if (file === "/dev/null") {
     return undefined;
@@ -87,6 +93,60 @@ const regionIntersectsIntervals = (region: CloneRegion, intervals: AddedInterval
   return fileIntervals.some((interval) => intersects(region, interval));
 };
 
+const nonWhitespaceLength = (text: string): number => text.replace(/\s+/g, "").length;
+
+const countWordTokens = (text: string): number => (text.match(/[A-Za-z0-9_]+/g) ?? []).length;
+
+const isSubstantiveCopy = (lines: DiffLine[]): boolean => {
+  if (lines.length < minCopyLines) {
+    return false;
+  }
+  const lengths = lines.map((line) => nonWhitespaceLength(line.plain.slice(1)));
+  const substantiveLines = lengths.filter((value) => value >= minCopyLineChars).length;
+  if (substantiveLines < minCopyLines) {
+    return false;
+  }
+  const totalNonWhitespace = lengths.reduce((sum, value) => sum + value, 0);
+  const wordTokens = lines.reduce((sum, line) => sum + countWordTokens(line.plain.slice(1)), 0);
+  if (totalNonWhitespace < minCopyNonWhitespaceChars) {
+    return false;
+  }
+  if (wordTokens < minCopyWordTokens) {
+    return false;
+  }
+  if (lines.length === 2 && lengths.every((value) => value < shortCopyLineChars)) {
+    return false;
+  }
+  return true;
+};
+
+const pruneTrivialCopyRuns = (files: FileDiff[]): void => {
+  files.forEach((file) => {
+    file.hunks.forEach((hunk) => {
+      let runLines: DiffLine[] = [];
+      const flush = (): void => {
+        if (runLines.length === 0) {
+          return;
+        }
+        if (!isSubstantiveCopy(runLines)) {
+          runLines.forEach((line) => {
+            line.copyTag = undefined;
+          });
+        }
+        runLines = [];
+      };
+      hunk.lines.forEach((line) => {
+        if (line.kind === "add" && line.copyTag && !line.hasBgAnsi) {
+          runLines.push(line);
+        } else if (runLines.length > 0) {
+          flush();
+        }
+      });
+      flush();
+    });
+  });
+};
+
 const applyCopyTag = (
   addedIndex: AddedLineIndex,
   region: CloneRegion,
@@ -100,6 +160,17 @@ const applyCopyTag = (
   }
   const lineMap = addedIndex.get(fileKey);
   if (!lineMap) {
+    return;
+  }
+  const candidateLines: DiffLine[] = [];
+  for (let lineNo = region.startLine; lineNo <= region.endLine; lineNo += 1) {
+    const line = lineMap.get(lineNo);
+    if (!line || line.hasBgAnsi) {
+      continue;
+    }
+    candidateLines.push(line);
+  }
+  if (!isSubstantiveCopy(candidateLines)) {
     return;
   }
   for (let lineNo = region.startLine; lineNo <= region.endLine; lineNo += 1) {
@@ -210,6 +281,7 @@ const applyCopyOverlay = (files: FileDiff[], clonePairs: ClonePair[], options: O
       hunk.foldSegments = computeFoldSegments(hunk, options);
     });
   });
+  pruneTrivialCopyRuns(files);
 
   return { files };
 };

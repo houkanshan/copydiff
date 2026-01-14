@@ -38,7 +38,7 @@ This note describes how `copydiff` generates HTML output and where styling logic
 
 - Added lines tagged by the overlay can be marked as copied:
   - Copied additions get a left accent marker.
-  - Copy runs render a collapsible "copied from ..." block with the source snippet when available.
+  - Copy runs show a small marker icon; click to expand a "copied from ..." block with the source snippet when available.
   - Copy edits can include inline highlights against the source line, and these only apply when a normal add/delete inline diff is not already used.
 - Pure-copy runs can be collapsed into `<details>` blocks.
 
