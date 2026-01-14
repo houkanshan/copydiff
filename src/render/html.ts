@@ -683,14 +683,14 @@ const buildCopyDetail = async (
         const lang = resolveLanguageForPath(run.source.file);
         const highlighted = await highlightLines(snippet, lang, options.debug, run.source.file);
         const rendered = highlighted.map(
-          (content) => `<span class="line copy-source-line">${content}</span>`
+          (content) => `<span class="line copy-source-line"><span class="line-content">${content}</span></span>`
         );
         body = rendered.join("\n");
       }
     }
   }
   if (!body) {
-    body = "<span class=\"line copy-source-line copy-source-missing\">source unavailable</span>";
+    body = "<span class=\"line copy-source-line copy-source-missing\"><span class=\"line-content\">source unavailable</span></span>";
   }
   return { summaryText, bodyHtml: body };
 };
@@ -867,7 +867,8 @@ ${buildAnsiPalette()}
   --inline-copy-bg: #fff1a8;
   --copy-meta-bg: #eef2f6;
   --copy-source-bg: #f6f8fa;
-  --line-no: #8c959f;
+  --line-no: #111111;
+  --line-no-bg: #f3f5f7;
   --copy-accent: ${copyAccent ?? defaultCopyAccent};
 }
 body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background: var(--bg); color: var(--text); margin: 0; }
@@ -889,22 +890,21 @@ body[data-view="side"] .diff-view-side { display: block; }
 .diff-grid-unified .diff-row { position: relative; padding-right: calc(var(--info-width) + var(--info-gap)); }
 .diff-grid-unified .diff-cell { min-width: 0; }
 .diff-grid-unified .info-cell { position: absolute; top: 0; right: 0; width: var(--info-width); z-index: 1; }
-.diff-grid-side .diff-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--info-width); column-gap: var(--info-gap); align-items: start; }
+.diff-grid-side .diff-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--info-gap); align-items: start; padding-right: calc(var(--info-width) + var(--info-gap)); }
 .diff-grid-side .diff-cell { min-width: 0; }
 .diff-grid-side .diff-cell.span-2 { grid-column: 1 / span 2; }
-.diff-grid-side .info-cell { position: static; width: auto; z-index: 1; }
-.line { display: block; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; padding-left: 4px; padding-right: 12px; }
-.line-no { display: inline-block; min-width: 4ch; padding-right: 8px; text-align: right; color: var(--line-no); font-variant-numeric: tabular-nums; user-select: none; }
+.diff-grid-side .info-cell { position: absolute; top: 0; right: 0; width: var(--info-width); z-index: 1; }
+.line { display: block; padding-right: 12px; }
+.line.has-prefix { display: grid; grid-template-columns: max-content 1fr; column-gap: 8px; align-items: stretch; }
+.line-prefix { display: flex; align-items: flex-start; align-self: stretch; padding-right: 8px; border-right: 1px solid #ffffff; background: var(--line-no-bg); }
+.line-content { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.line-no { display: inline-block; min-width: 4ch; text-align: right; color: var(--line-no); font-variant-numeric: tabular-nums; user-select: none; }
 .line.meta { background: var(--meta-bg); color: var(--meta-text); font-weight: 600; }
 .line.add { background: var(--add-bg); }
 .line.del { background: var(--del-bg); }
 .line.context { background: var(--ctx-bg); }
 .line.empty { background: var(--ctx-bg); }
 .line.moved { background: transparent; }
-.marker { display: inline-block; width: 1ch; color: var(--marker-ctx); }
-.line.add .marker { color: var(--marker-add); }
-.line.del .marker { color: var(--marker-del); }
-.line.context .marker { color: var(--marker-ctx); }
 .line.copied { background: var(--copied-bg); }
 .line.copy-accent { box-shadow: inset 3px 0 0 var(--copy-accent); }
 .inline-change { border-radius: 2px; padding: 0 1px; }
@@ -923,7 +923,6 @@ body[data-view="side"] .diff-view-side { display: block; }
 .copy-panel-body { padding: 4px 0; }
 .copy-panel-body .line { padding-left: 8px; padding-right: 8px; }
 .line.copy-source-line { background: var(--copy-source-bg); color: var(--text); }
-.line.copy-source-line .marker { color: var(--marker-ctx); }
 .copy-source-missing { font-style: italic; }
 @media (max-width: 960px) {
   header { padding: 12px 16px; }
@@ -995,18 +994,19 @@ const renderLineNumbers = (line: DiffLine): string =>
   `${renderLineNumber(line.oldLineNo, "old")}${renderLineNumber(line.newLineNo, "new")}`;
 
 const renderMetaLine = (line: DiffLine): string =>
-  `<span class="line meta">${escapeHtml(line.plain)}</span>`;
+  `<span class="line meta"><span class="line-content">${escapeHtml(line.plain)}</span></span>`;
 
 const renderFoldSummaryContent = (summary: string): string =>
-  `${renderLineNumber(undefined, "old")}${renderLineNumber(undefined, "new")}<span class="marker"> </span>${escapeHtml(
-    summary
-  )}`;
+  `<span class="line-prefix">${renderLineNumber(undefined, "old")}${renderLineNumber(
+    undefined,
+    "new"
+  )}</span><span class="line-content">${escapeHtml(summary)}</span>`;
 
 const renderFoldSummaryLine = (summary: string): string =>
-  `<summary class="line meta fold-summary">${renderFoldSummaryContent(summary)}</summary>`;
+  `<summary class="line meta fold-summary has-prefix">${renderFoldSummaryContent(summary)}</summary>`;
 
 const renderFoldSummaryInline = (summary: string): string =>
-  `<span class="line meta fold-summary">${renderFoldSummaryContent(summary)}</span>`;
+  `<span class="line meta fold-summary has-prefix">${renderFoldSummaryContent(summary)}</span>`;
 
 const renderDiffLine = (
   line: DiffLine,
@@ -1014,7 +1014,7 @@ const renderDiffLine = (
   copyAccent?: string,
   moved?: boolean
 ): string => {
-  const classes = ["line", line.kind];
+  const classes = ["line", line.kind, "has-prefix"];
   const isCopiedAdd = line.kind === "add" && line.copyTag;
   if (isCopiedAdd) {
     if (copyAccent) {
@@ -1026,8 +1026,9 @@ const renderDiffLine = (
   if (moved) {
     classes.push("moved");
   }
-  const marker = escapeHtml(line.plain.slice(0, 1));
-  return `<span class="${classes.join(" ")}">${renderLineNumbers(line)}<span class="marker">${marker}</span>${contentHtml}</span>`;
+  return `<span class="${classes.join(" ")}"><span class="line-prefix">${renderLineNumbers(
+    line
+  )}</span><span class="line-content">${contentHtml}</span></span>`;
 };
 
 type FoldSegmentMap = Map<number, { endIndex: number; summary: string }>;
@@ -1056,7 +1057,7 @@ const renderSideBySideLine = (
   const info = rendered.get(lineIndex);
   const content = info?.content ?? escapeHtml(line.plain.slice(1));
   const moved = info?.moved ?? false;
-  const classes = ["line", line.kind];
+  const classes = ["line", line.kind, "has-prefix"];
   const allowCopy = side === "right" && line.kind === "add" && line.copyTag;
   if (allowCopy) {
     if (copyAccent) {
@@ -1068,14 +1069,16 @@ const renderSideBySideLine = (
   if (moved) {
     classes.push("moved");
   }
-  const marker = escapeHtml(line.plain.slice(0, 1));
   const lineNo = side === "left" ? line.oldLineNo : line.newLineNo;
   const lineNoHtml = renderLineNumber(lineNo, side === "left" ? "old" : "new");
-  return `<span class="${classes.join(" ")}">${lineNoHtml}<span class="marker">${marker}</span>${content}</span>`;
+  return `<span class="${classes.join(" ")}"><span class="line-prefix">${lineNoHtml}</span><span class="line-content">${content}</span></span>`;
 };
 
 const renderEmptySideLine = (side: "left" | "right"): string =>
-  `<span class="line empty">${renderLineNumber(undefined, side === "left" ? "old" : "new")}<span class="marker"> </span></span>`;
+  `<span class="line empty has-prefix"><span class="line-prefix">${renderLineNumber(
+    undefined,
+    side === "left" ? "old" : "new"
+  )}</span><span class="line-content"></span></span>`;
 
 const renderUnifiedHunk = (
   lines: DiffLine[],
