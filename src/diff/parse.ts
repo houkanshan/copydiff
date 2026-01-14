@@ -15,6 +15,7 @@ type DiffLine = {
 type CopyTag = {
   similarity: number;
   source: CloneRegion;
+  sourceLine?: number;
   allowFold: boolean;
 };
 

@@ -364,14 +364,16 @@ const run = async (): Promise<number> => {
   const diffExtensions = collectDiffExtensions(diffFiles);
 
   let clonePairs = [];
+  let repoRoot: string | undefined;
   const hasDiffTargets = diffFiles.length > 0;
   if (options.scanScope === "changed-types" && !hasDiffTargets) {
     logVerbose(options, "scan-scope changed-types with no target files; skipping clone scan");
   } else {
     try {
       logVerbose(options, "loading clone pairs");
-      const repoRoot = await getRepoRoot();
-      const gitignorePatterns = await loadGitignorePatterns(repoRoot);
+      const resolvedRepoRoot = await getRepoRoot();
+      repoRoot = resolvedRepoRoot;
+      const gitignorePatterns = await loadGitignorePatterns(resolvedRepoRoot);
       const userIgnore = normalizeIgnorePatterns(options.ignore);
       options.ignore = Array.from(new Set([...userIgnore, ...gitignorePatterns]));
       logVerbose(
@@ -389,7 +391,7 @@ const run = async (): Promise<number> => {
         }
       }
       const cacheOptions = buildCacheOptions({
-        repoRoot,
+        repoRoot: resolvedRepoRoot,
         ignore: options.ignore,
         minLines: options.minLines,
         minTokens: options.minTokens,
@@ -400,19 +402,19 @@ const run = async (): Promise<number> => {
       });
       if (options.cache) {
         logVerbose(options, "checking clone cache");
-        const cachePath = await getCachePath(repoRoot, headSha, cacheOptions);
+        const cachePath = await getCachePath(resolvedRepoRoot, headSha, cacheOptions);
         const cached = await readCache(cachePath);
           if (cached) {
             logVerbose(options, `using clone cache with ${cached.length} pairs`);
             clonePairs = cached.map((pair) => ({
-              a: { ...pair.a, file: normalizeClonePath(repoRoot, pair.a.file) },
-              b: { ...pair.b, file: normalizeClonePath(repoRoot, pair.b.file) },
+              a: { ...pair.a, file: normalizeClonePath(resolvedRepoRoot, pair.a.file) },
+              b: { ...pair.b, file: normalizeClonePath(resolvedRepoRoot, pair.b.file) },
               similarity: pair.similarity
             }));
           } else {
           logVerbose(options, "cache miss, running jscpd");
           clonePairs = await runJscpd({
-            repoRoot,
+            repoRoot: resolvedRepoRoot,
             ignore: options.ignore,
             minLines: options.minLines,
             minTokens: options.minTokens,
@@ -425,7 +427,7 @@ const run = async (): Promise<number> => {
       } else {
         logVerbose(options, "running jscpd without cache");
         clonePairs = await runJscpd({
-          repoRoot,
+          repoRoot: resolvedRepoRoot,
           ignore: options.ignore,
           minLines: options.minLines,
           minTokens: options.minTokens,
@@ -463,13 +465,18 @@ const run = async (): Promise<number> => {
   logVerbose(options, "rendering terminal output");
   const terminalOutput = renderTerminal(overlay.files, {
     copyColor,
-    dimCopy: !copyColor && Boolean(process.stdout.isTTY)
+    dimCopy: !copyColor
   });
   process.stdout.write(terminalOutput);
 
   if (options.html) {
     logVerbose(options, `writing html output to ${options.html}`);
-    const html = renderHtml(overlay.files, { title: "copydiff", copyColor });
+    const html = await renderHtml(overlay.files, {
+      title: "copydiff",
+      copyColor,
+      debug: options.verbose,
+      repoRoot
+    });
     const outputPath = path.resolve(options.html);
     await writeFile(outputPath, html, "utf8");
   }

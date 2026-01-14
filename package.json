@@ -10,6 +10,9 @@
     "lint": "eslint src --ext .ts",
     "format": "prettier --write src"
   },
+  "dependencies": {
+    "shiki": "^3.0.0"
+  },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "eslint": "^9.16.0",

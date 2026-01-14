@@ -107,9 +107,11 @@ const applyCopyTag = (
     if (!line || line.hasBgAnsi) {
       continue;
     }
+    const sourceLine = source.startLine + (lineNo - region.startLine);
     const tag: CopyTag = {
       similarity,
       source,
+      sourceLine: sourceLine <= source.endLine ? sourceLine : undefined,
       allowFold
     };
     line.copyTag = tag;

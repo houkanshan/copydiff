@@ -16,6 +16,8 @@ Generate HTML output:
 git diff --color=always | copydiff --stdin --html out.html
 ```
 
+HTML output includes syntax highlighting, diff-style background blocks, and copy-source details.
+
 Wrapper mode:
 
 ```bash
@@ -25,7 +27,7 @@ copydiff base..head
 ## Options
 
 - `--stdin` read diff from stdin.
-- `--html <path>` write a light-mode HTML diff.
+- `--html <path>` write a light-mode HTML diff with copy-source blocks.
 - `--no-fold-pure` disable folding for pure copies.
 - `--copy-color <spec>` set copy highlight color using git color syntax (defaults to `color.diff.newMoved`).
 - `--no-copy-color` disable copy highlighting.
