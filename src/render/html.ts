@@ -40,6 +40,16 @@ type CopyDetail = {
   bodyHtml: string;
 };
 
+type CopyRunDetail = {
+  startIndex: number;
+  detail: CopyDetail;
+};
+
+type LineRenderInfo = {
+  content: string;
+  moved: boolean;
+};
+
 const themeName = "github-light";
 const defaultLanguage = "text";
 const defaultCopyAccent = "#0969da";
@@ -690,6 +700,38 @@ const renderCopyPanel = (panelId: string, detail: CopyDetail): string => {
   return `<details class="copy-panel" id="${panelId}">${summary}<div class="copy-panel-body">${detail.bodyHtml}</div></details>`;
 };
 
+const buildCopyRunDetails = async (
+  lines: DiffLine[],
+  foldSegments: FoldSegmentMap,
+  options: HtmlRenderOptions,
+  sourceCache: SourceFileCache
+): Promise<CopyRunDetail[]> => {
+  const copyRuns = buildCopyRuns(lines);
+  const foldRanges = Array.from(foldSegments.entries()).map(([startIndex, segment]) => ({
+    startIndex,
+    endIndex: segment.endIndex
+  }));
+  const isFoldedRun = (run: CopyRun): boolean =>
+    foldRanges.some((range) => run.startIndex >= range.startIndex && run.endIndex <= range.endIndex);
+  const details: CopyRunDetail[] = [];
+  for (const run of copyRuns) {
+    if (isFoldedRun(run)) {
+      continue;
+    }
+    const detail = await buildCopyDetail(run, options, sourceCache);
+    details.push({ startIndex: run.startIndex, detail });
+  }
+  return details;
+};
+
+const buildCopyRunPanelMap = (details: CopyRunDetail[], panelPrefix: string): Map<number, string> => {
+  const panels = new Map<number, string>();
+  details.forEach((detail, index) => {
+    panels.set(detail.startIndex, renderCopyPanel(`${panelPrefix}-${index}`, detail.detail));
+  });
+  return panels;
+};
+
 const buildCopyInlineHighlightMap = async (
   lines: DiffLine[],
   inlineHighlightMap: Map<number, InlineRange[]>,
@@ -764,6 +806,42 @@ const highlightLines = async (
   return [...highlighted, ...lines.slice(highlighted.length).map(escapeHtml)];
 };
 
+const buildLineRenderInfo = async (
+  lines: DiffLine[],
+  options: HtmlRenderOptions,
+  lang: string,
+  fileLabel: string | undefined,
+  sourceCache: SourceFileCache
+): Promise<Map<number, LineRenderInfo>> => {
+  const inlineHighlightMap = buildInlineHighlightMap(lines);
+  const copyInlineHighlightMap = await buildCopyInlineHighlightMap(lines, inlineHighlightMap, options, sourceCache);
+  const codeLines = lines
+    .filter((line) => line.kind === "add" || line.kind === "del" || line.kind === "context")
+    .map((line) => line.plain.slice(1));
+  const highlighted = await highlightLines(codeLines, lang, options.debug, fileLabel);
+  let codeIndex = 0;
+  const rendered = new Map<number, LineRenderInfo>();
+  lines.forEach((line, lineIndex) => {
+    if (line.kind !== "add" && line.kind !== "del" && line.kind !== "context") {
+      return;
+    }
+    let content = highlighted[codeIndex] ?? escapeHtml(codeLines[codeIndex] ?? "");
+    const inlineRanges = inlineHighlightMap.get(lineIndex);
+    if (inlineRanges && (line.kind === "add" || line.kind === "del")) {
+      const inlineClass = line.kind === "add" ? "inline-change inline-add" : "inline-change inline-del";
+      content = applyInlineHighlights(content, inlineRanges, inlineClass);
+    } else if (line.kind === "add") {
+      const copyRanges = copyInlineHighlightMap.get(lineIndex);
+      if (copyRanges) {
+        content = applyInlineHighlights(content, copyRanges, "inline-change inline-copy");
+      }
+    }
+    rendered.set(lineIndex, { content, moved: line.hasBgAnsi || hasFaintAnsi(line.rawAnsi) });
+    codeIndex += 1;
+  });
+  return rendered;
+};
+
 const buildHtmlHead = (options: HtmlRenderOptions, copyAccent?: string): string => `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -789,20 +867,39 @@ ${buildAnsiPalette()}
   --inline-copy-bg: #fff1a8;
   --copy-meta-bg: #eef2f6;
   --copy-source-bg: #f6f8fa;
+  --line-no: #8c959f;
   --copy-accent: ${copyAccent ?? defaultCopyAccent};
 }
 body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background: var(--bg); color: var(--text); margin: 0; }
 header { padding: 16px 20px; border-bottom: 1px solid #d0d7de; background: #f8f9fb; }
+.header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.header-meta { min-width: 240px; }
+.legend { font-size: 12px; color: #57606a; margin-top: 4px; }
+.view-toggle { display: inline-flex; gap: 6px; padding: 2px; border-radius: 999px; border: 1px solid #d0d7de; background: #eef2f6; }
+.view-toggle button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; border-radius: 999px; background: transparent; color: #57606a; cursor: pointer; }
+.view-toggle button:focus { outline: 2px solid #0969da; outline-offset: 2px; }
+body[data-view="unified"] .view-toggle button[data-view-toggle="unified"],
+body[data-view="side"] .view-toggle button[data-view-toggle="side"] { background: #ffffff; color: var(--text); box-shadow: 0 1px 2px rgba(27, 31, 36, 0.1); }
 main { padding: 16px 20px; }
-.diff-grid { font-size: 13px; line-height: 1.5; }
-.diff-row { position: relative; --info-gap: 18px; --info-width: clamp(260px, 34%, 420px); padding-right: calc(var(--info-width) + var(--info-gap)); }
-.diff-cell { min-width: 0; }
-.info-cell { position: absolute; top: 0; right: 0; width: var(--info-width); z-index: 1; }
+.diff-view { display: none; }
+body[data-view="unified"] .diff-view-unified { display: block; }
+body[data-view="side"] .diff-view-side { display: block; }
+.diff-view-side { overflow-x: auto; }
+.diff-grid { font-size: 13px; line-height: 1.5; --info-gap: 18px; --info-width: clamp(260px, 34%, 420px); }
+.diff-grid-unified .diff-row { position: relative; padding-right: calc(var(--info-width) + var(--info-gap)); }
+.diff-grid-unified .diff-cell { min-width: 0; }
+.diff-grid-unified .info-cell { position: absolute; top: 0; right: 0; width: var(--info-width); z-index: 1; }
+.diff-grid-side .diff-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--info-width); column-gap: var(--info-gap); align-items: start; }
+.diff-grid-side .diff-cell { min-width: 0; }
+.diff-grid-side .diff-cell.span-2 { grid-column: 1 / span 2; }
+.diff-grid-side .info-cell { position: static; width: auto; z-index: 1; }
 .line { display: block; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; padding-left: 4px; padding-right: 12px; }
+.line-no { display: inline-block; min-width: 4ch; padding-right: 8px; text-align: right; color: var(--line-no); font-variant-numeric: tabular-nums; user-select: none; }
 .line.meta { background: var(--meta-bg); color: var(--meta-text); font-weight: 600; }
 .line.add { background: var(--add-bg); }
 .line.del { background: var(--del-bg); }
 .line.context { background: var(--ctx-bg); }
+.line.empty { background: var(--ctx-bg); }
 .line.moved { background: transparent; }
 .marker { display: inline-block; width: 1ch; color: var(--marker-ctx); }
 .line.add .marker { color: var(--marker-add); }
@@ -828,32 +925,88 @@ main { padding: 16px 20px; }
 .line.copy-source-line { background: var(--copy-source-bg); color: var(--text); }
 .line.copy-source-line .marker { color: var(--marker-ctx); }
 .copy-source-missing { font-style: italic; }
-.legend { font-size: 12px; color: #57606a; }
 @media (max-width: 960px) {
-  .diff-row { padding-right: 0; }
-  .info-cell { position: static; width: auto; padding-top: 8px; }
-  .info-cell:empty { display: none; padding-top: 0; }
+  header { padding: 12px 16px; }
+  main { padding: 12px 16px; }
+  .diff-grid-unified .diff-row { padding-right: 0; }
+  .diff-grid-unified .info-cell { position: static; width: auto; padding-top: 8px; }
+  .diff-grid-unified .info-cell:empty { display: none; padding-top: 0; }
 }
 </style>
 </head>
-<body>
+<body data-view="unified">
 <header>
-  <strong>copydiff</strong>
-  <div class="legend">Syntax highlighting enabled when available. Copied source details appear next to their matching additions. Pure copy blocks are collapsed.</div>
+  <div class="header-row">
+    <div class="header-meta">
+      <strong>copydiff</strong>
+      <div class="legend">Syntax highlighting enabled when available. Copied source details appear next to their matching additions. Pure copy blocks are collapsed.</div>
+    </div>
+    <div class="view-toggle" role="group" aria-label="Diff view">
+      <button type="button" data-view-toggle="unified" aria-pressed="true">Unified</button>
+      <button type="button" data-view-toggle="side" aria-pressed="false">Side-by-side</button>
+    </div>
+  </div>
 </header>
-<main>
-  <div class="diff-grid">`;
+<main>`;
 
-const buildHtmlFooter = (): string => `</div>
-</main>
+const buildHtmlFooter = (): string => `</main>
+<script>
+(() => {
+  const storageKey = "copydiff:view";
+  const body = document.body;
+  const buttons = Array.from(document.querySelectorAll("[data-view-toggle]"));
+  const applyView = (view) => {
+    const next = view === "side" ? "side" : "unified";
+    body.dataset.view = next;
+    buttons.forEach((button) => {
+      const isActive = button.dataset.viewToggle === next;
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+    try {
+      localStorage.setItem(storageKey, next);
+    } catch {
+      // Ignore storage failures (private browsing, etc.).
+    }
+  };
+  let initial = "unified";
+  try {
+    const stored = localStorage.getItem(storageKey);
+    if (stored === "side" || stored === "unified") {
+      initial = stored;
+    }
+  } catch {
+    // Ignore storage failures (private browsing, etc.).
+  }
+  applyView(initial);
+  buttons.forEach((button) => {
+    button.addEventListener("click", () => applyView(button.dataset.viewToggle ?? "unified"));
+  });
+})();
+</script>
 </body>
 </html>`;
+
+const renderLineNumber = (value: number | undefined, className: string): string => {
+  const text = value === undefined ? "" : String(value);
+  return `<span class="line-no ${className}">${text}</span>`;
+};
+
+const renderLineNumbers = (line: DiffLine): string =>
+  `${renderLineNumber(line.oldLineNo, "old")}${renderLineNumber(line.newLineNo, "new")}`;
 
 const renderMetaLine = (line: DiffLine): string =>
   `<span class="line meta">${escapeHtml(line.plain)}</span>`;
 
+const renderFoldSummaryContent = (summary: string): string =>
+  `${renderLineNumber(undefined, "old")}${renderLineNumber(undefined, "new")}<span class="marker"> </span>${escapeHtml(
+    summary
+  )}`;
+
 const renderFoldSummaryLine = (summary: string): string =>
-  `<summary class="line meta fold-summary"><span class="marker"> </span>${escapeHtml(summary)}</summary>`;
+  `<summary class="line meta fold-summary">${renderFoldSummaryContent(summary)}</summary>`;
+
+const renderFoldSummaryInline = (summary: string): string =>
+  `<span class="line meta fold-summary">${renderFoldSummaryContent(summary)}</span>`;
 
 const renderDiffLine = (
   line: DiffLine,
@@ -874,7 +1027,7 @@ const renderDiffLine = (
     classes.push("moved");
   }
   const marker = escapeHtml(line.plain.slice(0, 1));
-  return `<span class="${classes.join(" ")}"><span class="marker">${marker}</span>${contentHtml}</span>`;
+  return `<span class="${classes.join(" ")}">${renderLineNumbers(line)}<span class="marker">${marker}</span>${contentHtml}</span>`;
 };
 
 type FoldSegmentMap = Map<number, { endIndex: number; summary: string }>;
@@ -882,108 +1035,237 @@ type FoldSegmentMap = Map<number, { endIndex: number; summary: string }>;
 const renderRow = (diffHtml: string, panelHtml?: string): string =>
   `<div class="diff-row"><div class="diff-cell">${diffHtml}</div><div class="info-cell">${panelHtml ?? ""}</div></div>`;
 
-const renderHunk = async (
+const renderSideBySideRow = (leftHtml: string, rightHtml: string, panelHtml?: string): string =>
+  `<div class="diff-row side-row"><div class="diff-cell left">${leftHtml}</div><div class="diff-cell right">${rightHtml}</div><div class="info-cell">${panelHtml ?? ""}</div></div>`;
+
+const renderSideBySideMetaRow = (metaHtml: string): string =>
+  `<div class="diff-row side-row"><div class="diff-cell span-2">${metaHtml}</div><div class="info-cell"></div></div>`;
+
+const renderSideBySideFoldSummaryRow = (summary: string): string =>
+  `<summary class="diff-row side-row"><span class="diff-cell span-2">${renderFoldSummaryInline(
+    summary
+  )}</span><span class="info-cell"></span></summary>`;
+
+const renderSideBySideLine = (
+  line: DiffLine,
+  lineIndex: number,
+  side: "left" | "right",
+  rendered: Map<number, LineRenderInfo>,
+  copyAccent: string | undefined
+): string => {
+  const info = rendered.get(lineIndex);
+  const content = info?.content ?? escapeHtml(line.plain.slice(1));
+  const moved = info?.moved ?? false;
+  const classes = ["line", line.kind];
+  const allowCopy = side === "right" && line.kind === "add" && line.copyTag;
+  if (allowCopy) {
+    if (copyAccent) {
+      classes.push("copy-accent");
+    } else {
+      classes.push("copied");
+    }
+  }
+  if (moved) {
+    classes.push("moved");
+  }
+  const marker = escapeHtml(line.plain.slice(0, 1));
+  const lineNo = side === "left" ? line.oldLineNo : line.newLineNo;
+  const lineNoHtml = renderLineNumber(lineNo, side === "left" ? "old" : "new");
+  return `<span class="${classes.join(" ")}">${lineNoHtml}<span class="marker">${marker}</span>${content}</span>`;
+};
+
+const renderEmptySideLine = (side: "left" | "right"): string =>
+  `<span class="line empty">${renderLineNumber(undefined, side === "left" ? "old" : "new")}<span class="marker"> </span></span>`;
+
+const renderUnifiedHunk = (
   lines: DiffLine[],
   foldSegments: FoldSegmentMap,
-  options: HtmlRenderOptions,
-  lang: string,
-  copyAccent: string | undefined,
-  fileLabel: string | undefined,
-  panelPrefix: string,
-  sourceCache: SourceFileCache
-): Promise<string> => {
-  const inlineHighlightMap = buildInlineHighlightMap(lines);
-  const copyInlineHighlightMap = await buildCopyInlineHighlightMap(lines, inlineHighlightMap, options, sourceCache);
-  const copyRuns = buildCopyRuns(lines);
-  const foldRanges = Array.from(foldSegments.entries()).map(([startIndex, segment]) => ({
-    startIndex,
-    endIndex: segment.endIndex
-  }));
-  const isFoldedRun = (run: CopyRun): boolean =>
-    foldRanges.some((range) => run.startIndex >= range.startIndex && run.endIndex <= range.endIndex);
-  const copyRunPanels = new Map<number, string>();
-  let panelIndex = 0;
-  for (const run of copyRuns) {
-    if (isFoldedRun(run)) {
-      continue;
-    }
-    const detail = await buildCopyDetail(run, options, sourceCache);
-    const panelId = `${panelPrefix}-${panelIndex}`;
-    panelIndex += 1;
-    copyRunPanels.set(run.startIndex, renderCopyPanel(panelId, detail));
-  }
-  const codeLines = lines
-    .filter((line) => line.kind === "add" || line.kind === "del" || line.kind === "context")
-    .map((line) => line.plain.slice(1));
-  const highlighted = await highlightLines(codeLines, lang, options.debug, fileLabel);
-  let codeIndex = 0;
-  const renderedLines = lines.map((line, lineIndex) => {
-    if (line.kind === "add" || line.kind === "del" || line.kind === "context") {
-      let content = highlighted[codeIndex] ?? escapeHtml(codeLines[codeIndex] ?? "");
-      const inlineRanges = inlineHighlightMap.get(lineIndex);
-      if (inlineRanges && (line.kind === "add" || line.kind === "del")) {
-        const inlineClass = line.kind === "add" ? "inline-change inline-add" : "inline-change inline-del";
-        content = applyInlineHighlights(content, inlineRanges, inlineClass);
-      } else if (line.kind === "add") {
-        const copyRanges = copyInlineHighlightMap.get(lineIndex);
-        if (copyRanges) {
-          content = applyInlineHighlights(content, copyRanges, "inline-change inline-copy");
-        }
-      }
-      codeIndex += 1;
-      const accent = options.copyColor ? copyAccent ?? defaultCopyAccent : undefined;
-      const moved = line.hasBgAnsi || hasFaintAnsi(line.rawAnsi);
-      const lineHtml = renderDiffLine(line, content, accent, moved);
-      return lineHtml;
-    }
-    return renderMetaLine(line);
-  });
-
+  rendered: Map<number, LineRenderInfo>,
+  copyRunPanels: Map<number, string>,
+  copyAccent: string | undefined
+): string => {
   const output: string[] = [];
   let index = 0;
   while (index < lines.length) {
     const fold = foldSegments.get(index);
     if (fold) {
-      const foldedLines = renderedLines.slice(index, fold.endIndex + 1).join("\n");
+      const foldedLines = lines
+        .slice(index, fold.endIndex + 1)
+        .map((line, lineIndex) => {
+          const absoluteIndex = index + lineIndex;
+          const info = rendered.get(absoluteIndex);
+          if (info) {
+            return renderDiffLine(line, info.content, copyAccent, info.moved);
+          }
+          return renderMetaLine(line);
+        })
+        .join("\n");
       const diffHtml = `<details class="pure-copy">${renderFoldSummaryLine(fold.summary)}${foldedLines}</details>`;
       output.push(renderRow(diffHtml));
       index = fold.endIndex + 1;
       continue;
     }
+    const line = lines[index];
+    const info = rendered.get(index);
+    const lineHtml = info ? renderDiffLine(line, info.content, copyAccent, info.moved) : renderMetaLine(line);
     const panelHtml = copyRunPanels.get(index);
-    output.push(renderRow(renderedLines[index], panelHtml));
+    output.push(renderRow(lineHtml, panelHtml));
     index += 1;
+  }
+  return output.join("\n");
+};
+
+const renderSideBySideRows = (
+  lines: DiffLine[],
+  baseIndex: number,
+  rendered: Map<number, LineRenderInfo>,
+  copyRunPanels: Map<number, string>,
+  copyAccent: string | undefined
+): string[] => {
+  const rows: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const absoluteIndex = baseIndex + index;
+    if (line.kind === "meta") {
+      rows.push(renderSideBySideMetaRow(renderMetaLine(line)));
+      index += 1;
+      continue;
+    }
+    if (line.kind === "context") {
+      const leftHtml = renderSideBySideLine(line, absoluteIndex, "left", rendered, copyAccent);
+      const rightHtml = renderSideBySideLine(line, absoluteIndex, "right", rendered, copyAccent);
+      rows.push(renderSideBySideRow(leftHtml, rightHtml, copyRunPanels.get(absoluteIndex)));
+      index += 1;
+      continue;
+    }
+    if (line.kind === "del") {
+      const delLines: DiffLine[] = [];
+      const delIndexes: number[] = [];
+      while (index < lines.length && lines[index].kind === "del") {
+        delLines.push(lines[index]);
+        delIndexes.push(baseIndex + index);
+        index += 1;
+      }
+      const addLines: DiffLine[] = [];
+      const addIndexes: number[] = [];
+      while (index < lines.length && lines[index].kind === "add") {
+        addLines.push(lines[index]);
+        addIndexes.push(baseIndex + index);
+        index += 1;
+      }
+      const total = Math.max(delLines.length, addLines.length);
+      for (let offset = 0; offset < total; offset += 1) {
+        const leftLine = delLines[offset];
+        const rightLine = addLines[offset];
+        const leftIndex = leftLine ? delIndexes[offset] : undefined;
+        const rightIndex = rightLine ? addIndexes[offset] : undefined;
+        const leftHtml = leftLine
+          ? renderSideBySideLine(leftLine, leftIndex ?? 0, "left", rendered, copyAccent)
+          : renderEmptySideLine("left");
+        const rightHtml = rightLine
+          ? renderSideBySideLine(rightLine, rightIndex ?? 0, "right", rendered, copyAccent)
+          : renderEmptySideLine("right");
+        rows.push(renderSideBySideRow(leftHtml, rightHtml, rightIndex !== undefined ? copyRunPanels.get(rightIndex) : undefined));
+      }
+      continue;
+    }
+    if (line.kind === "add") {
+      const addLines: DiffLine[] = [];
+      const addIndexes: number[] = [];
+      while (index < lines.length && lines[index].kind === "add") {
+        addLines.push(lines[index]);
+        addIndexes.push(baseIndex + index);
+        index += 1;
+      }
+      addLines.forEach((addLine, offset) => {
+        const addIndex = addIndexes[offset];
+        const leftHtml = renderEmptySideLine("left");
+        const rightHtml = renderSideBySideLine(addLine, addIndex, "right", rendered, copyAccent);
+        rows.push(renderSideBySideRow(leftHtml, rightHtml, copyRunPanels.get(addIndex)));
+      });
+      continue;
+    }
+    index += 1;
+  }
+  return rows;
+};
+
+const renderSideBySideHunk = (
+  lines: DiffLine[],
+  foldSegments: FoldSegmentMap,
+  rendered: Map<number, LineRenderInfo>,
+  copyRunPanels: Map<number, string>,
+  copyAccent: string | undefined
+): string => {
+  const output: string[] = [];
+  const folds = Array.from(foldSegments.entries()).sort(([a], [b]) => a - b);
+  let cursor = 0;
+  folds.forEach(([startIndex, segment]) => {
+    if (cursor < startIndex) {
+      output.push(
+        ...renderSideBySideRows(
+          lines.slice(cursor, startIndex),
+          cursor,
+          rendered,
+          copyRunPanels,
+          copyAccent
+        )
+      );
+    }
+    const foldedRows = renderSideBySideRows(
+      lines.slice(startIndex, segment.endIndex + 1),
+      startIndex,
+      rendered,
+      copyRunPanels,
+      copyAccent
+    ).join("\n");
+    output.push(`<details class="pure-copy">${renderSideBySideFoldSummaryRow(segment.summary)}${foldedRows}</details>`);
+    cursor = segment.endIndex + 1;
+  });
+  if (cursor < lines.length) {
+    output.push(...renderSideBySideRows(lines.slice(cursor), cursor, rendered, copyRunPanels, copyAccent));
   }
   return output.join("\n");
 };
 
 const renderHtml = async (files: FileDiff[], options: HtmlRenderOptions): Promise<string> => {
   const copyAccent = extractCopyAccent(options.copyColor);
+  const accent = options.copyColor ? copyAccent ?? defaultCopyAccent : undefined;
   const sourceCache: SourceFileCache = new Map();
-  const content: string[] = [buildHtmlHead(options, copyAccent)];
+  const unified: string[] = [];
+  const sideBySide: string[] = [];
   for (const [fileIndex, file] of files.entries()) {
     const lang = resolveLanguage(file);
     const fileLabel = stripDiffPrefix(file.toFile) ?? stripDiffPrefix(file.fromFile);
-    file.headerLines.forEach((line) => content.push(renderRow(renderMetaLine(line))));
+    file.headerLines.forEach((line) => {
+      const meta = renderMetaLine(line);
+      unified.push(renderRow(meta));
+      sideBySide.push(renderSideBySideMetaRow(meta));
+    });
     for (const [hunkIndex, hunk] of file.hunks.entries()) {
-      content.push(renderRow(renderMetaLine(hunk.headerLine)));
+      const hunkHeader = renderMetaLine(hunk.headerLine);
+      unified.push(renderRow(hunkHeader));
+      sideBySide.push(renderSideBySideMetaRow(hunkHeader));
       const foldMap: FoldSegmentMap = new Map();
       hunk.foldSegments.forEach((segment) => {
         foldMap.set(segment.startIndex, { endIndex: segment.endIndex, summary: segment.summary });
       });
-      const rendered = await renderHunk(
-        hunk.lines,
-        foldMap,
-        options,
-        lang,
-        copyAccent,
-        fileLabel,
-        `copy-${fileIndex}-${hunkIndex}`,
-        sourceCache
-      );
-      content.push(rendered);
+      const rendered = await buildLineRenderInfo(hunk.lines, options, lang, fileLabel, sourceCache);
+      const copyRunDetails = await buildCopyRunDetails(hunk.lines, foldMap, options, sourceCache);
+      const unifiedPanels = buildCopyRunPanelMap(copyRunDetails, `copy-u-${fileIndex}-${hunkIndex}`);
+      const sidePanels = buildCopyRunPanelMap(copyRunDetails, `copy-s-${fileIndex}-${hunkIndex}`);
+      unified.push(renderUnifiedHunk(hunk.lines, foldMap, rendered, unifiedPanels, accent));
+      sideBySide.push(renderSideBySideHunk(hunk.lines, foldMap, rendered, sidePanels, accent));
     }
   }
+  const content: string[] = [buildHtmlHead(options, copyAccent)];
+  content.push('<div class="diff-view diff-view-unified"><div class="diff-grid diff-grid-unified">');
+  content.push(...unified);
+  content.push("</div></div>");
+  content.push('<div class="diff-view diff-view-side"><div class="diff-grid diff-grid-side">');
+  content.push(...sideBySide);
+  content.push("</div></div>");
   content.push(buildHtmlFooter());
   return content.join("\n");
 };

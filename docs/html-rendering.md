@@ -11,7 +11,8 @@ This note describes how `copydiff` generates HTML output and where styling logic
 ### Core renderer (`src/render/html.ts`)
 
 - **Input:** a list of `FileDiff` objects with hunks and copy overlay metadata.
-- **Output:** a complete HTML document with inline CSS and a `<pre>` block.
+- **Output:** a complete HTML document with inline CSS, plus unified and
+  side-by-side layouts that can be toggled in-page.
 - **Per-file language:** each file resolves a language based on filename or extension
   (e.g., `.ts` -> `typescript`). Unknown extensions fall back to `text`.
 
@@ -27,6 +28,7 @@ This note describes how `copydiff` generates HTML output and where styling logic
 
 - **Line wrapper:** `<span class="line {add|del|context|meta}">`.
 - **Marker:** a fixed-width `<span class="marker">` shows the leading `+/-/ `.
+- **Line numbers:** old/new line numbers render alongside the marker.
 - **Backgrounds:** handled by CSS variables in the `<style>` block.
 - **Moved lines:** if ANSI metadata indicates moved/dimmed lines, the renderer
   adds a `moved` class; CSS can dim or remove backgrounds for these lines.
