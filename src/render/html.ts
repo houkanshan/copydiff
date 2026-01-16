@@ -868,7 +868,10 @@ ${buildAnsiPalette()}
   --copy-meta-bg: #eef2f6;
   --copy-source-bg: #f6f8fa;
   --line-no: #111111;
-  --line-no-bg: #f3f5f7;
+  --line-no-bg: #ffffff;
+  --line-no-add-bg: #edfdf1;
+  --line-no-del-bg: #fff3f1;
+  --line-no-copy-bg: #f2f8ff;
   --copy-accent: ${copyAccent ?? defaultCopyAccent};
 }
 body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background: var(--bg); color: var(--text); margin: 0; }
@@ -897,6 +900,9 @@ body[data-view="side"] .diff-view-side { display: block; }
 .line { display: block; padding-right: 12px; }
 .line.has-prefix { display: grid; grid-template-columns: max-content 1fr; column-gap: 8px; align-items: stretch; }
 .line-prefix { display: flex; align-items: flex-start; align-self: stretch; padding-right: 8px; border-right: 1px solid #ffffff; background: var(--line-no-bg); }
+.line.add .line-prefix { background: var(--line-no-add-bg); }
+.line.del .line-prefix { background: var(--line-no-del-bg); }
+.line.copied .line-prefix { background: var(--line-no-copy-bg); }
 .line-content { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .line-no { display: inline-block; min-width: 4ch; text-align: right; color: var(--line-no); font-variant-numeric: tabular-nums; user-select: none; }
 .line.meta { background: var(--meta-bg); color: var(--meta-text); font-weight: 600; }
@@ -915,7 +921,7 @@ body[data-view="side"] .diff-view-side { display: block; }
 .pure-copy summary { cursor: pointer; list-style: none; margin: 0; padding: 0; }
 .pure-copy summary::-webkit-details-marker { display: none; }
 .pure-copy summary::marker { content: ""; }
-.line.fold-summary { background: #eef2f6; color: var(--meta-text); font-weight: 600; }
+.line.fold-summary { background: #c6dcff; color: var(--meta-text); font-weight: 600; }
 .copy-panel { border: 1px solid #d0d7de; border-radius: 6px; background: #ffffff; margin-bottom: 12px; overflow: hidden; }
 .copy-panel-summary { cursor: pointer; list-style: none; margin: 0; padding: 6px 8px; background: var(--copy-meta-bg); color: var(--meta-text); font-weight: 600; display: block; font-size: inherit; line-height: inherit; }
 .copy-panel-summary::-webkit-details-marker { display: none; }
