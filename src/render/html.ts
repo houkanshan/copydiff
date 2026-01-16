@@ -884,7 +884,22 @@ header { padding: 16px 20px; border-bottom: 1px solid #d0d7de; background: #f8f9
 .view-toggle button:focus { outline: 2px solid #0969da; outline-offset: 2px; }
 body[data-view="unified"] .view-toggle button[data-view-toggle="unified"],
 body[data-view="side"] .view-toggle button[data-view-toggle="side"] { background: #ffffff; color: var(--text); box-shadow: 0 1px 2px rgba(27, 31, 36, 0.1); }
-main { padding: 16px 20px; }
+main { padding: 16px 0; }
+.diff-file-list { display: flex; flex-direction: column; gap: 16px; }
+.diff-file { border: 1px solid #d0d7de; border-radius: 0; background: #ffffff; overflow: hidden; }
+.diff-file-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 16px; background: var(--meta-bg); color: var(--text); font-weight: 600; cursor: pointer; list-style: none; }
+.diff-file[open] .diff-file-summary { border-bottom: 1px solid #d0d7de; }
+.diff-file-summary::-webkit-details-marker { display: none; }
+.diff-file-summary::marker { content: ""; }
+.file-header { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
+.file-toggle { width: 0; height: 0; border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent var(--meta-text); transition: transform 0.15s ease; }
+.diff-file[open] .file-toggle { transform: rotate(90deg); }
+.file-title { font-size: 13px; }
+.file-meta { font-size: 12px; color: var(--meta-text); font-weight: 500; }
+.file-stats { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 600; }
+.file-stat-add { color: var(--marker-add); }
+.file-stat-del { color: var(--marker-del); }
+.diff-file-body { padding: 0; }
 .diff-view { display: none; }
 body[data-view="unified"] .diff-view-unified { display: block; }
 body[data-view="side"] .diff-view-side { display: block; }
@@ -896,7 +911,11 @@ body[data-view="side"] .diff-view-side { display: block; }
 .diff-grid-side .diff-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--info-gap); align-items: start; padding-right: calc(var(--info-width) + var(--info-gap)); }
 .diff-grid-side .diff-cell { min-width: 0; }
 .diff-grid-side .diff-cell.span-2 { grid-column: 1 / span 2; }
-.diff-grid-side .info-cell { position: absolute; top: 0; right: 0; width: var(--info-width); z-index: 1; }
+.diff-grid-side .info-cell { position: absolute; top: 0; right: 8px; width: var(--info-width); z-index: 1; }
+.diff-grid-unified .info-cell.is-expanded,
+.diff-grid-side .info-cell.is-expanded { z-index: 3; }
+.diff-grid-unified .diff-row::after,
+.diff-grid-side .diff-row::after { content: ""; position: absolute; top: 0; bottom: 0; right: calc(var(--info-width) + var(--info-gap)); width: 1px; background: #d0d7de; pointer-events: none; }
 .line { display: block; padding-right: 12px; }
 .line.has-prefix { display: grid; grid-template-columns: max-content 1fr; column-gap: 8px; align-items: stretch; }
 .line-prefix { display: flex; align-items: flex-start; align-self: stretch; padding-right: 8px; border-right: 1px solid #ffffff; background: var(--line-no-bg); }
@@ -932,8 +951,9 @@ body[data-view="side"] .diff-view-side { display: block; }
 .copy-source-missing { font-style: italic; }
 @media (max-width: 960px) {
   header { padding: 12px 16px; }
-  main { padding: 12px 16px; }
+  main { padding: 16px 0; }
   .diff-grid-unified .diff-row { padding-right: 0; }
+  .diff-grid-unified .diff-row::after { display: none; }
   .diff-grid-unified .info-cell { position: static; width: auto; padding-top: 8px; }
   .diff-grid-unified .info-cell:empty { display: none; padding-top: 0; }
 }
@@ -986,6 +1006,17 @@ const buildHtmlFooter = (): string => `</main>
   buttons.forEach((button) => {
     button.addEventListener("click", () => applyView(button.dataset.viewToggle ?? "unified"));
   });
+  const updateInfoCell = (infoCell) => {
+    const hasOpenPanel = infoCell.querySelector(".copy-panel[open]");
+    infoCell.classList.toggle("is-expanded", Boolean(hasOpenPanel));
+  };
+  const infoCells = Array.from(document.querySelectorAll(".info-cell"));
+  infoCells.forEach((infoCell) => {
+    updateInfoCell(infoCell);
+    infoCell.querySelectorAll(".copy-panel").forEach((panel) => {
+      panel.addEventListener("toggle", () => updateInfoCell(infoCell));
+    });
+  });
 })();
 </script>
 </body>
@@ -1013,6 +1044,37 @@ const renderFoldSummaryLine = (summary: string): string =>
 
 const renderFoldSummaryInline = (summary: string): string =>
   `<span class="line meta fold-summary has-prefix">${renderFoldSummaryContent(summary)}</span>`;
+
+const resolveFileHeaderPaths = (file: FileDiff): { fromPath?: string; toPath?: string } => {
+  let fromPath = stripDiffPrefix(file.fromFile);
+  let toPath = stripDiffPrefix(file.toFile);
+  if (!fromPath && !toPath) {
+    const header = file.headerLines.find((line) => line.plain.startsWith("diff --git "));
+    const match = header?.plain.match(/^diff --git\s+(\S+)\s+(\S+)/);
+    if (match) {
+      fromPath = stripDiffPrefix(match[1]);
+      toPath = stripDiffPrefix(match[2]);
+    }
+  }
+  return { fromPath, toPath };
+};
+
+const renderFileSummary = (file: FileDiff, addedLines: number, deletedLines: number): string => {
+  const { fromPath, toPath } = resolveFileHeaderPaths(file);
+  const moved = Boolean(fromPath && toPath && fromPath !== toPath);
+  const title = moved ? `${fromPath} -> ${toPath}` : fromPath ?? toPath ?? "unknown file";
+  const metaLines = file.headerLines
+    .map((line) => line.plain)
+    .filter((plain) => plain.length > 0)
+    .filter((plain) => !plain.startsWith("diff --git"))
+    .filter((plain) => !plain.startsWith("--- "))
+    .filter((plain) => !plain.startsWith("+++ "));
+  const metaHtml = metaLines.length > 0 ? `<span class="file-meta">${escapeHtml(metaLines.join(" | "))}</span>` : "";
+  const statsHtml = `<span class="file-stats"><span class="file-stat-add">+${addedLines}</span><span class="file-stat-del">-${deletedLines}</span></span>`;
+  return `<summary class="diff-file-summary"><span class="file-header"><span class="file-toggle" aria-hidden="true"></span><span class="file-title">${escapeHtml(
+    title
+  )}</span>${metaHtml}</span>${statsHtml}</summary>`;
+};
 
 const renderDiffLine = (
   line: DiffLine,
@@ -1242,15 +1304,23 @@ const renderHtml = async (files: FileDiff[], options: HtmlRenderOptions): Promis
   const copyAccent = extractCopyAccent(options.copyColor);
   const accent = options.copyColor ? copyAccent ?? defaultCopyAccent : undefined;
   const sourceCache: SourceFileCache = new Map();
-  const unified: string[] = [];
-  const sideBySide: string[] = [];
+  const content: string[] = [buildHtmlHead(options, copyAccent)];
+  content.push('<div class="diff-file-list">');
   for (const [fileIndex, file] of files.entries()) {
+    const unified: string[] = [];
+    const sideBySide: string[] = [];
     const lang = resolveLanguage(file);
     const fileLabel = stripDiffPrefix(file.toFile) ?? stripDiffPrefix(file.fromFile);
-    file.headerLines.forEach((line) => {
-      const meta = renderMetaLine(line);
-      unified.push(renderRow(meta));
-      sideBySide.push(renderSideBySideMetaRow(meta));
+    let addedLines = 0;
+    let deletedLines = 0;
+    file.hunks.forEach((hunk) => {
+      hunk.lines.forEach((line) => {
+        if (line.kind === "add") {
+          addedLines += 1;
+        } else if (line.kind === "del") {
+          deletedLines += 1;
+        }
+      });
     });
     for (const [hunkIndex, hunk] of file.hunks.entries()) {
       const hunkHeader = renderMetaLine(hunk.headerLine);
@@ -1267,14 +1337,18 @@ const renderHtml = async (files: FileDiff[], options: HtmlRenderOptions): Promis
       unified.push(renderUnifiedHunk(hunk.lines, foldMap, rendered, unifiedPanels, accent));
       sideBySide.push(renderSideBySideHunk(hunk.lines, foldMap, rendered, sidePanels, accent));
     }
+    content.push(`<details class="diff-file" open>${renderFileSummary(file, addedLines, deletedLines)}`);
+    content.push('<div class="diff-file-body">');
+    content.push('<div class="diff-view diff-view-unified"><div class="diff-grid diff-grid-unified">');
+    content.push(...unified);
+    content.push("</div></div>");
+    content.push('<div class="diff-view diff-view-side"><div class="diff-grid diff-grid-side">');
+    content.push(...sideBySide);
+    content.push("</div></div>");
+    content.push("</div>");
+    content.push("</details>");
   }
-  const content: string[] = [buildHtmlHead(options, copyAccent)];
-  content.push('<div class="diff-view diff-view-unified"><div class="diff-grid diff-grid-unified">');
-  content.push(...unified);
-  content.push("</div></div>");
-  content.push('<div class="diff-view diff-view-side"><div class="diff-grid diff-grid-side">');
-  content.push(...sideBySide);
-  content.push("</div></div>");
+  content.push("</div>");
   content.push(buildHtmlFooter());
   return content.join("\n");
 };
