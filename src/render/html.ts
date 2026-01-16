@@ -50,6 +50,20 @@ type LineRenderInfo = {
   moved: boolean;
 };
 
+type FileNavEntry = {
+  path: string;
+  title: string;
+  anchor: string;
+  status: "changed" | "new" | "deleted" | "moved";
+};
+
+type FileTreeNode = {
+  name: string;
+  path: string;
+  children: Map<string, FileTreeNode>;
+  entry?: FileNavEntry;
+};
+
 const themeName = "github-light";
 const defaultLanguage = "text";
 const defaultCopyAccent = "#0969da";
@@ -842,7 +856,11 @@ const buildLineRenderInfo = async (
   return rendered;
 };
 
-const buildHtmlHead = (options: HtmlRenderOptions, copyAccent?: string): string => `<!DOCTYPE html>
+const buildHtmlHead = (
+  options: HtmlRenderOptions,
+  copyAccent?: string,
+  fileTreeHtml?: string
+): string => `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -873,6 +891,20 @@ ${buildAnsiPalette()}
   --line-no-del-bg: #fff3f1;
   --line-no-copy-bg: #f2f8ff;
   --copy-accent: ${copyAccent ?? defaultCopyAccent};
+  --tree-bg: #ffffff;
+  --tree-border: #d0d7de;
+  --tree-header-bg: #f6f8fa;
+  --tree-link: #0969da;
+  --tree-muted: #57606a;
+  --tree-shadow: rgba(27, 31, 36, 0.2);
+  --tree-status-changed-bg: #eef2f6;
+  --tree-status-changed-text: #57606a;
+  --tree-status-new-bg: #dafbe1;
+  --tree-status-new-text: #1a7f37;
+  --tree-status-deleted-bg: #ffebe8;
+  --tree-status-deleted-text: #cf222e;
+  --tree-status-moved-bg: #e7f0ff;
+  --tree-status-moved-text: #0969da;
 }
 body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background: var(--bg); color: var(--text); margin: 0; }
 header { padding: 16px 20px; border-bottom: 1px solid #d0d7de; background: #f8f9fb; }
@@ -891,6 +923,25 @@ main { padding: 16px 0; }
 .diff-file[open] .diff-file-summary { border-bottom: 1px solid #d0d7de; }
 .diff-file-summary::-webkit-details-marker { display: none; }
 .diff-file-summary::marker { content: ""; }
+.file-tree { position: fixed; top: 64px; right: 8px; z-index: 6; }
+.file-tree-panel { overflow: hidden; border: 1px solid var(--tree-border); border-radius: 12px; background: var(--tree-bg); box-shadow: 0 12px 28px var(--tree-shadow); width: 320px; }
+.file-tree-panel summary { cursor: pointer; list-style: none; padding: 8px 12px; font-size: 12px; font-weight: 700; color: var(--text); }
+.file-tree-panel summary::-webkit-details-marker { display: none; }
+.file-tree-panel summary::marker { content: ""; }
+.file-tree-content { max-height: calc(100vh - 160px); overflow: auto; padding: 0 8px 8px; }
+.file-tree-list { list-style: none; margin: 0; padding-left: 0; }
+.file-tree-list .file-tree-list { padding-left: 8px; }
+.file-tree-node > summary { cursor: pointer; list-style: none; color: var(--text); font-weight: 600; font-size: 12px; padding: 4px; }
+.file-tree-node[open] > summary::before { transform: rotate(90deg); }
+.file-tree-item { margin: 4px 0 4px 4px; }
+.file-tree-item a { color: var(--tree-link); text-decoration: none; font-size: 12px; }
+.file-tree-item a:hover { text-decoration: underline; }
+.file-tree-item a:focus { outline: 2px solid var(--tree-link); outline-offset: 2px; }
+.file-tree-status { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-right: 6px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; }
+.file-tree-status.status-changed { background: var(--tree-status-changed-bg); color: var(--tree-status-changed-text); }
+.file-tree-status.status-new { background: var(--tree-status-new-bg); color: var(--tree-status-new-text); }
+.file-tree-status.status-deleted { background: var(--tree-status-deleted-bg); color: var(--tree-status-deleted-text); }
+.file-tree-status.status-moved { background: var(--tree-status-moved-bg); color: var(--tree-status-moved-text); }
 .file-header { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
 .file-toggle { width: 0; height: 0; border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent var(--meta-text); transition: transform 0.15s ease; }
 .diff-file[open] .file-toggle { transform: rotate(90deg); }
@@ -952,6 +1003,9 @@ body[data-view="side"] .diff-view-side { display: block; }
 @media (max-width: 960px) {
   header { padding: 12px 16px; }
   main { padding: 16px 0; }
+  .file-tree { top: 76px; right: 8px; }
+  .file-tree-panel { max-width: min(260px, 70vw); }
+  .file-tree-content { max-height: 52vh; }
   .diff-grid-unified .diff-row { padding-right: 0; }
   .diff-grid-unified .diff-row::after { display: none; }
   .diff-grid-unified .info-cell { position: static; width: auto; padding-top: 8px; }
@@ -970,8 +1024,9 @@ body[data-view="side"] .diff-view-side { display: block; }
       <button type="button" data-view-toggle="unified" aria-pressed="true">Unified</button>
       <button type="button" data-view-toggle="side" aria-pressed="false">Side-by-side</button>
     </div>
-  </div>
+</div>
 </header>
+${fileTreeHtml ?? ""}
 <main>`;
 
 const buildHtmlFooter = (): string => `</main>
@@ -1017,6 +1072,19 @@ const buildHtmlFooter = (): string => `</main>
       panel.addEventListener("toggle", () => updateInfoCell(infoCell));
     });
   });
+  const fileLinks = Array.from(document.querySelectorAll("[data-file-anchor]"));
+  fileLinks.forEach((link) => {
+    link.addEventListener("click", () => {
+      const targetId = link.getAttribute("data-file-anchor");
+      if (!targetId) {
+        return;
+      }
+      const target = document.getElementById(targetId);
+      if (target && target instanceof HTMLDetailsElement) {
+        target.open = true;
+      }
+    });
+  });
 })();
 </script>
 </body>
@@ -1057,6 +1125,156 @@ const resolveFileHeaderPaths = (file: FileDiff): { fromPath?: string; toPath?: s
     }
   }
   return { fromPath, toPath };
+};
+
+const buildFileAnchorId = (pathLabel: string, index: number): string => {
+  const normalized = pathLabel
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const suffix = normalized.length > 0 ? normalized : "file";
+  return `file-${index + 1}-${suffix}`;
+};
+
+const resolveFileStatus = (file: FileDiff): "changed" | "new" | "deleted" | "moved" => {
+  const { fromPath, toPath } = resolveFileHeaderPaths(file);
+  if (!fromPath && toPath) {
+    return "new";
+  }
+  if (fromPath && !toPath) {
+    return "deleted";
+  }
+  if (fromPath && toPath && fromPath !== toPath) {
+    return "moved";
+  }
+  return "changed";
+};
+
+const buildFileNavEntries = (files: FileDiff[]): FileNavEntry[] =>
+  files.map((file, index) => {
+    const { fromPath, toPath } = resolveFileHeaderPaths(file);
+    const moved = Boolean(fromPath && toPath && fromPath !== toPath);
+    const displayPath = toPath ?? fromPath ?? `file-${index + 1}`;
+    const title = moved ? `${fromPath} -> ${toPath}` : displayPath;
+    return {
+      path: displayPath,
+      title,
+      anchor: buildFileAnchorId(displayPath, index),
+      status: resolveFileStatus(file)
+    };
+  });
+
+const createFileTreeNode = (name: string, pathLabel: string): FileTreeNode => ({
+  name,
+  path: pathLabel,
+  children: new Map<string, FileTreeNode>()
+});
+
+const buildFileTree = (entries: FileNavEntry[]): FileTreeNode => {
+  const root = createFileTreeNode("", "");
+  entries.forEach((entry) => {
+    const segments = entry.path.split("/").filter((segment) => segment.length > 0);
+    if (segments.length === 0) {
+      const node = createFileTreeNode(entry.path, entry.path);
+      node.entry = entry;
+      root.children.set(entry.path, node);
+      return;
+    }
+    let current = root;
+    let currentPath = "";
+    segments.forEach((segment, index) => {
+      currentPath = currentPath.length > 0 ? `${currentPath}/${segment}` : segment;
+      let child = current.children.get(segment);
+      if (!child) {
+        child = createFileTreeNode(segment, currentPath);
+        current.children.set(segment, child);
+      }
+      if (index === segments.length - 1) {
+        child.entry = entry;
+      }
+      current = child;
+    });
+  });
+  return root;
+};
+
+const renderFileTreeList = (node: FileTreeNode): string => {
+  const children = Array.from(node.children.values());
+  if (children.length === 0) {
+    return "";
+  }
+  const statusLabelMap: Record<FileNavEntry["status"], string> = {
+    changed: "M",
+    new: "N",
+    deleted: "D",
+    moved: "R"
+  };
+  const statusTitleMap: Record<FileNavEntry["status"], string> = {
+    changed: "changed",
+    new: "new",
+    deleted: "deleted",
+    moved: "moved"
+  };
+  const collapseDirChain = (start: FileTreeNode): { label: string; node: FileTreeNode } => {
+    let current = start;
+    let label = current.name;
+    while (!current.entry && current.children.size === 1) {
+      const [child] = Array.from(current.children.values());
+      if (child.entry || child.children.size === 0) {
+        break;
+      }
+      label = label.length > 0 ? `${label}/${child.name}` : child.name;
+      current = child;
+    }
+    return { label, node: current };
+  };
+  const dirNodes: Array<{ label: string; node: FileTreeNode }> = [];
+  const fileNodes: FileTreeNode[] = [];
+  children.forEach((child) => {
+    if (child.children.size > 0) {
+      dirNodes.push(collapseDirChain(child));
+    } else if (child.entry) {
+      fileNodes.push(child);
+    }
+  });
+  dirNodes.sort((a, b) => a.label.localeCompare(b.label));
+  fileNodes.sort((a, b) => a.name.localeCompare(b.name));
+  const items: string[] = [];
+  dirNodes.forEach(({ label, node: dirNode }) => {
+    const subtree = renderFileTreeList(dirNode);
+    items.push(
+      `<li class="file-tree-dir"><details class="file-tree-node" open><summary>${escapeHtml(
+        label
+      )}</summary>${subtree}</details></li>`
+    );
+  });
+  fileNodes.forEach((child) => {
+    const entry = child.entry;
+    if (!entry) {
+      return;
+    }
+    const statusLabel = statusLabelMap[entry.status];
+    const statusTitle = statusTitleMap[entry.status];
+    items.push(
+      `<li class="file-tree-item"><a href="#${entry.anchor}" data-file-anchor="${
+        entry.anchor
+      }" title="${escapeHtml(entry.title)}" aria-label="${escapeHtml(
+        `${entry.title} (${statusTitle})`
+      )}"><span class="file-tree-status status-${entry.status}" aria-hidden="true">${statusLabel}</span>${escapeHtml(
+        child.name
+      )}</a></li>`
+    );
+  });
+  return `<ul class="file-tree-list">${items.join("")}</ul>`;
+};
+
+const renderFileTreePanel = (entries: FileNavEntry[]): string => {
+  if (entries.length === 0) {
+    return "";
+  }
+  const root = buildFileTree(entries);
+  const listHtml = renderFileTreeList(root);
+  return `<aside class="file-tree" aria-label="Files"><details class="file-tree-panel" open><summary>Files (${entries.length})</summary><nav class="file-tree-content" aria-label="Changed file tree">${listHtml}</nav></details></aside>`;
 };
 
 const renderFileSummary = (file: FileDiff, addedLines: number, deletedLines: number): string => {
@@ -1304,13 +1522,17 @@ const renderHtml = async (files: FileDiff[], options: HtmlRenderOptions): Promis
   const copyAccent = extractCopyAccent(options.copyColor);
   const accent = options.copyColor ? copyAccent ?? defaultCopyAccent : undefined;
   const sourceCache: SourceFileCache = new Map();
-  const content: string[] = [buildHtmlHead(options, copyAccent)];
+  const fileNavEntries = buildFileNavEntries(files);
+  const fileTreeHtml = renderFileTreePanel(fileNavEntries);
+  const content: string[] = [buildHtmlHead(options, copyAccent, fileTreeHtml)];
   content.push('<div class="diff-file-list">');
   for (const [fileIndex, file] of files.entries()) {
     const unified: string[] = [];
     const sideBySide: string[] = [];
     const lang = resolveLanguage(file);
     const fileLabel = stripDiffPrefix(file.toFile) ?? stripDiffPrefix(file.fromFile);
+    const fileNav = fileNavEntries[fileIndex];
+    const anchorId = fileNav?.anchor ?? buildFileAnchorId(fileLabel ?? `file-${fileIndex + 1}`, fileIndex);
     let addedLines = 0;
     let deletedLines = 0;
     file.hunks.forEach((hunk) => {
@@ -1337,7 +1559,13 @@ const renderHtml = async (files: FileDiff[], options: HtmlRenderOptions): Promis
       unified.push(renderUnifiedHunk(hunk.lines, foldMap, rendered, unifiedPanels, accent));
       sideBySide.push(renderSideBySideHunk(hunk.lines, foldMap, rendered, sidePanels, accent));
     }
-    content.push(`<details class="diff-file" open>${renderFileSummary(file, addedLines, deletedLines)}`);
+    content.push(
+      `<details class="diff-file" open id="${anchorId}">${renderFileSummary(
+        file,
+        addedLines,
+        deletedLines
+      )}`
+    );
     content.push('<div class="diff-file-body">');
     content.push('<div class="diff-view diff-view-unified"><div class="diff-grid diff-grid-unified">');
     content.push(...unified);
