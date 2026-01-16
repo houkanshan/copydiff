@@ -886,8 +886,8 @@ body[data-view="unified"] .view-toggle button[data-view-toggle="unified"],
 body[data-view="side"] .view-toggle button[data-view-toggle="side"] { background: #ffffff; color: var(--text); box-shadow: 0 1px 2px rgba(27, 31, 36, 0.1); }
 main { padding: 16px 0; }
 .diff-file-list { display: flex; flex-direction: column; gap: 16px; }
-.diff-file { border: 1px solid #d0d7de; border-radius: 0; background: #ffffff; overflow: hidden; }
-.diff-file-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 16px; background: var(--meta-bg); color: var(--text); font-weight: 600; cursor: pointer; list-style: none; }
+.diff-file { border: 1px solid #d0d7de; border-radius: 0; background: #ffffff; overflow: visible; }
+.diff-file-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 16px; background: var(--meta-bg); color: var(--text); font-weight: 600; cursor: pointer; list-style: none; position: sticky; top: 0; z-index: 4; }
 .diff-file[open] .diff-file-summary { border-bottom: 1px solid #d0d7de; }
 .diff-file-summary::-webkit-details-marker { display: none; }
 .diff-file-summary::marker { content: ""; }
