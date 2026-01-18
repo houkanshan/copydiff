@@ -2,27 +2,30 @@
 
 `copydiff` is a Bun + TypeScript helper that augments `git diff` output with copy/clone awareness using `jscpd` while preserving Git's moved-line coloring.
 
+## Install
+
+```bash
+bun i -g @houkanshan/copydiff
+```
+
 ## Usage
 
 Filter mode:
 
 ```bash
-git diff --color=always | copydiff --stdin
+copydiff abc123...efg456
 ```
 
 Generate HTML output:
 
 ```bash
-git diff --color=always | copydiff --stdin --html out.html
+copydiff base...head --html out.html
 ```
 
 HTML output includes syntax highlighting, diff-style background blocks, and copy highlights with expandable source details.
 
 Wrapper mode:
 
-```bash
-copydiff base..head
-```
 
 ## Options
 

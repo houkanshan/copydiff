@@ -1,14 +1,14 @@
 {
-  "name": "copydiff",
+  "name": "@houkanshan/copydiff",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "bin": {
     "copydiff": "src/cli.ts"
   },
   "scripts": {
     "lint": "eslint src --ext .ts",
-    "format": "prettier --write src"
+    "format": "prettier --write src",
+    "build": "bun build src/cli.ts --outdir dist --target bun"
   },
   "dependencies": {
     "shiki": "^3.0.0"
