@@ -7,6 +7,8 @@
 
 <img src="./docs/screenshot.png" alt="copydiff" width="800" />
 
+<sub>code from bluesky-social/social-app</sub>
+
 ## Install
 
 ```bash
