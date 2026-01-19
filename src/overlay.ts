@@ -179,10 +179,13 @@ const applyCopyTag = (
       continue;
     }
     const sourceLine = source.startLine + (lineNo - region.startLine);
+    if (sourceLine > source.endLine) {
+      continue;
+    }
     const tag: CopyTag = {
       similarity,
       source,
-      sourceLine: sourceLine <= source.endLine ? sourceLine : undefined,
+      sourceLine,
       allowFold
     };
     line.copyTag = tag;
