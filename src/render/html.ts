@@ -677,23 +677,109 @@ const buildCopyRuns = (lines: DiffLine[]): CopyRun[] => {
   return runs;
 };
 
+const collectCopyRunLines = (lines: DiffLine[], run: CopyRun): string[] => {
+  const runLines: string[] = [];
+  for (let index = run.startIndex; index <= run.endIndex; index += 1) {
+    const line = lines[index];
+    if (!line || line.kind !== "add") {
+      continue;
+    }
+    runLines.push(line.plain.slice(1));
+  }
+  return runLines;
+};
+
+const alignCopyRunSourceRange = (
+  run: CopyRun,
+  runLines: string[],
+  sourceLines: string[]
+): { startLine: number; endLine: number } | undefined => {
+  const runLength = runLines.length;
+  if (runLength < 3) {
+    return undefined;
+  }
+  const regionStart = Math.max(1, run.source.startLine);
+  const regionEnd = Math.min(run.source.endLine, sourceLines.length);
+  if (regionEnd < regionStart) {
+    return undefined;
+  }
+  const windowLength = regionEnd - regionStart + 1;
+  if (runLength > windowLength) {
+    return undefined;
+  }
+
+  const normalizedRun = runLines.map((line) => line.trim());
+  const substantive = normalizedRun.map((line) => line.length >= 3);
+  const maxScore = substantive.filter(Boolean).length;
+  if (maxScore < 2) {
+    return undefined;
+  }
+  const normalizedSource = sourceLines.slice(regionStart - 1, regionEnd).map((line) => line.trim());
+  const maxOffset = windowLength - runLength;
+  const guessOffset = Math.max(0, Math.min(run.sourceStartLine - regionStart, maxOffset));
+
+  let bestOffset = guessOffset;
+  let bestScore = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let offset = 0; offset <= maxOffset; offset += 1) {
+    let score = 0;
+    for (let index = 0; index < runLength; index += 1) {
+      if (!substantive[index]) {
+        continue;
+      }
+      if (normalizedRun[index] === normalizedSource[offset + index]) {
+        score += 1;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestOffset = offset;
+      bestDistance = Math.abs(offset - guessOffset);
+      continue;
+    }
+    if (score === bestScore) {
+      const distance = Math.abs(offset - guessOffset);
+      if (distance < bestDistance) {
+        bestOffset = offset;
+        bestDistance = distance;
+      }
+    }
+  }
+
+  const minScore = Math.max(2, Math.ceil(maxScore * 0.4));
+  if (bestScore < minScore) {
+    return undefined;
+  }
+  const startLine = regionStart + bestOffset;
+  return { startLine, endLine: startLine + runLength - 1 };
+};
+
 const buildCopyDetail = async (
   run: CopyRun,
+  diffLines: DiffLine[],
   options: HtmlRenderOptions,
   sourceCache: SourceFileCache
 ): Promise<CopyDetail> => {
-  const sourceLabel = `${run.source.file}:${run.sourceStartLine}-${run.sourceEndLine}`;
   const similarity = Math.round(run.similarity * 100);
-  const summaryText = `copied from ${sourceLabel} (${similarity}%)`;
   let body = "";
+  let sourceLabel = `${run.source.file}:${run.sourceStartLine}-${run.sourceEndLine}`;
+  let sourceStartLine = run.sourceStartLine;
+  let sourceEndLine = run.sourceEndLine;
   const repoRoot = options.repoRoot;
   if (repoRoot) {
-    const lines = await readSourceFileLines(repoRoot, run.source.file, sourceCache);
-    if (lines) {
-      const start = Math.max(1, run.sourceStartLine);
-      const end = Math.min(run.sourceEndLine, lines.length);
+    const sourceLines = await readSourceFileLines(repoRoot, run.source.file, sourceCache);
+    if (sourceLines) {
+      const runLines = collectCopyRunLines(diffLines, run);
+      const aligned = alignCopyRunSourceRange(run, runLines, sourceLines);
+      if (aligned) {
+        sourceStartLine = aligned.startLine;
+        sourceEndLine = aligned.endLine;
+      }
+      sourceLabel = `${run.source.file}:${sourceStartLine}-${sourceEndLine}`;
+      const start = Math.max(1, sourceStartLine);
+      const end = Math.min(sourceEndLine, sourceLines.length);
       if (start <= end) {
-        const snippet = lines.slice(start - 1, end);
+        const snippet = sourceLines.slice(start - 1, end);
         const lang = resolveLanguageForPath(run.source.file);
         const highlighted = await highlightLines(snippet, lang, options.debug, run.source.file);
         const rendered = highlighted.map(
@@ -706,6 +792,7 @@ const buildCopyDetail = async (
   if (!body) {
     body = "<span class=\"line copy-source-line copy-source-missing\"><span class=\"line-content\">source unavailable</span></span>";
   }
+  const summaryText = `copied from ${sourceLabel} (${similarity}%)`;
   return { summaryText, bodyHtml: body };
 };
 
@@ -732,7 +819,7 @@ const buildCopyRunDetails = async (
     if (isFoldedRun(run)) {
       continue;
     }
-    const detail = await buildCopyDetail(run, options, sourceCache);
+    const detail = await buildCopyDetail(run, lines, options, sourceCache);
     details.push({ startIndex: run.startIndex, detail });
   }
   return details;
@@ -757,6 +844,22 @@ const buildCopyInlineHighlightMap = async (
   if (!repoRoot) {
     return map;
   }
+  const alignedSourceLineMap = new Map<number, number>();
+  const copyRuns = buildCopyRuns(lines);
+  for (const run of copyRuns) {
+    const sourceLines = await readSourceFileLines(repoRoot, run.source.file, sourceCache);
+    if (!sourceLines) {
+      continue;
+    }
+    const runLines = collectCopyRunLines(lines, run);
+    const aligned = alignCopyRunSourceRange(run, runLines, sourceLines);
+    if (!aligned) {
+      continue;
+    }
+    for (let index = run.startIndex; index <= run.endIndex; index += 1) {
+      alignedSourceLineMap.set(index, aligned.startLine + (index - run.startIndex));
+    }
+  }
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (line.kind !== "add" || !line.copyTag) {
@@ -768,7 +871,7 @@ const buildCopyInlineHighlightMap = async (
     if (line.hasBgAnsi || hasFaintAnsi(line.rawAnsi)) {
       continue;
     }
-    const sourceLineNo = line.copyTag.sourceLine;
+    const sourceLineNo = alignedSourceLineMap.get(index) ?? line.copyTag.sourceLine;
     if (!sourceLineNo) {
       continue;
     }
@@ -875,21 +978,21 @@ ${buildAnsiPalette()}
   --meta-text: #57606a;
   --add-bg: #dafbe1;
   --del-bg: #ffebe8;
-  --copied-bg: #e6f7ff;
+  --copied-bg: #f6ffe6;
   --ctx-bg: #ffffff;
   --marker-add: #1a7f37;
   --marker-del: #cf222e;
   --marker-ctx: #57606a;
   --inline-add-bg: #aceebb;
   --inline-del-bg: #ffcecb;
-  --inline-copy-bg: #fff1a8;
-  --copy-meta-bg: #eef2f6;
-  --copy-source-bg: #f6f8fa;
+  --inline-copy-bg: #e5f7b8;
+  --copy-meta-bg: #eef7d8;
+  --copy-source-bg: #f8ffee;
   --line-no: #111111;
   --line-no-bg: #ffffff;
   --line-no-add-bg: #edfdf1;
   --line-no-del-bg: #fff3f1;
-  --line-no-copy-bg: #f2f8ff;
+  --line-no-copy-bg: #eef7cf;
   --copy-accent: ${copyAccent ?? defaultCopyAccent};
   --tree-bg: #ffffff;
   --tree-border: #d0d7de;
@@ -905,6 +1008,9 @@ ${buildAnsiPalette()}
   --tree-status-deleted-text: #cf222e;
   --tree-status-moved-bg: #e7f0ff;
   --tree-status-moved-text: #0969da;
+  --tree-active-bg: #e7f0ff;
+  --tree-active-text: #0b2f6a;
+  --tree-active-border: #9cc2ff;
 }
 body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background: var(--bg); color: var(--text); margin: 0; }
 header { padding: 16px 20px; border-bottom: 1px solid #d0d7de; background: #f8f9fb; }
@@ -928,15 +1034,16 @@ main { padding: 16px 0; }
 .file-tree-panel summary { cursor: pointer; list-style: none; padding: 8px 12px; font-size: 12px; font-weight: 700; color: var(--text); }
 .file-tree-panel summary::-webkit-details-marker { display: none; }
 .file-tree-panel summary::marker { content: ""; }
-.file-tree-content { max-height: calc(100vh - 160px); overflow: auto; padding: 0 8px 8px; }
+.file-tree-content { max-height: 50vh; overflow: auto; padding: 0 8px 8px; }
 .file-tree-list { list-style: none; margin: 0; padding-left: 0; }
 .file-tree-list .file-tree-list { padding-left: 8px; }
 .file-tree-node > summary { cursor: pointer; list-style: none; color: var(--text); font-weight: 600; font-size: 12px; padding: 4px; }
 .file-tree-node[open] > summary::before { transform: rotate(90deg); }
 .file-tree-item { margin: 4px 0 4px 4px; }
-.file-tree-item a { color: var(--tree-link); text-decoration: none; font-size: 12px; }
+.file-tree-item a { color: var(--tree-link); text-decoration: none; font-size: 12px; border-radius: 6px; padding: 2px 4px; }
 .file-tree-item a:hover { text-decoration: underline; }
 .file-tree-item a:focus { outline: 2px solid var(--tree-link); outline-offset: 2px; }
+.file-tree-item a[aria-current="location"] { background: var(--tree-active-bg); color: var(--tree-active-text); box-shadow: inset 0 0 0 1px var(--tree-active-border); text-decoration: none; }
 .file-tree-status { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-right: 6px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; }
 .file-tree-status.status-changed { background: var(--tree-status-changed-bg); color: var(--tree-status-changed-text); }
 .file-tree-status.status-new { background: var(--tree-status-new-bg); color: var(--tree-status-new-text); }
@@ -983,7 +1090,7 @@ body[data-view="side"] .diff-view-side { display: block; }
 .line.moved { background: transparent; }
 .line.copied { background: var(--copied-bg); }
 .line.copy-accent { box-shadow: inset 3px 0 0 var(--copy-accent); }
-.inline-change { border-radius: 2px; padding: 0 1px; }
+.inline-change { border-radius: 2px; }
 .inline-add { background: var(--inline-add-bg); }
 .inline-del { background: var(--inline-del-bg); }
 .inline-copy { background: var(--inline-copy-bg); }
@@ -1005,8 +1112,10 @@ body[data-view="side"] .diff-view-side { display: block; }
   main { padding: 16px 0; }
   .file-tree { top: 76px; right: 8px; }
   .file-tree-panel { max-width: min(260px, 70vw); }
-  .file-tree-content { max-height: 52vh; }
-  .diff-grid-unified .diff-row { padding-right: 0; }
+  .file-tree-content { max-height: 50vh; }
+  .diff-grid-unified .diff-row { padding-right: 0; display: flex; flex-direction: column; }
+  .diff-grid-unified .diff-cell { order: 1; }
+  .diff-grid-unified .info-cell { order: 2; }
   .diff-grid-unified .diff-row::after { display: none; }
   .diff-grid-unified .info-cell { position: static; width: auto; padding-top: 8px; }
   .diff-grid-unified .info-cell:empty { display: none; padding-top: 0; }
@@ -1073,6 +1182,31 @@ const buildHtmlFooter = (): string => `</main>
     });
   });
   const fileLinks = Array.from(document.querySelectorAll("[data-file-anchor]"));
+  const fileLinkMap = new Map();
+  fileLinks.forEach((link) => {
+    const anchor = link.getAttribute("data-file-anchor");
+    if (anchor) {
+      fileLinkMap.set(anchor, link);
+    }
+  });
+  let activeAnchor = "";
+  const setActiveLink = (anchor) => {
+    if (!anchor || anchor === activeAnchor) {
+      return;
+    }
+    const next = fileLinkMap.get(anchor);
+    if (!next) {
+      return;
+    }
+    if (activeAnchor) {
+      const prev = fileLinkMap.get(activeAnchor);
+      if (prev) {
+        prev.removeAttribute("aria-current");
+      }
+    }
+    next.setAttribute("aria-current", "location");
+    activeAnchor = anchor;
+  };
   fileLinks.forEach((link) => {
     link.addEventListener("click", () => {
       const targetId = link.getAttribute("data-file-anchor");
@@ -1083,8 +1217,59 @@ const buildHtmlFooter = (): string => `</main>
       if (target && target instanceof HTMLDetailsElement) {
         target.open = true;
       }
+      setActiveLink(targetId);
     });
   });
+  const fileSections = Array.from(document.querySelectorAll(".diff-file[id]"));
+  const resolveActiveOffset = () => {
+    const header = document.querySelector("header");
+    const headerHeight = header ? header.getBoundingClientRect().height : 0;
+    const minOffset = Math.max(72, headerHeight + 12);
+    return Math.min(minOffset, 160);
+  };
+  const updateActiveFromScroll = () => {
+    if (fileSections.length === 0 || fileLinkMap.size === 0) {
+      return;
+    }
+    const offset = resolveActiveOffset();
+    let candidate = null;
+    let bestTop = -Infinity;
+    fileSections.forEach((section) => {
+      const rect = section.getBoundingClientRect();
+      if (rect.bottom <= offset) {
+        return;
+      }
+      if (rect.top <= offset) {
+        if (rect.top > bestTop) {
+          candidate = section;
+          bestTop = rect.top;
+        }
+        return;
+      }
+      if (!candidate) {
+        candidate = section;
+      }
+    });
+    if (candidate && candidate.id) {
+      setActiveLink(candidate.id);
+    }
+  };
+  if (fileSections.length > 0 && fileLinkMap.size > 0) {
+    let rafId = 0;
+    const scheduleUpdate = () => {
+      if (rafId) {
+        return;
+      }
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0;
+        updateActiveFromScroll();
+      });
+    };
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    window.addEventListener("hashchange", scheduleUpdate);
+    scheduleUpdate();
+  }
 })();
 </script>
 </body>
@@ -1305,7 +1490,7 @@ const renderDiffLine = (
   if (isCopiedAdd) {
     if (copyAccent) {
       classes.push("copy-accent");
-    } else {
+    } else if (!line.hasBgAnsi) {
       classes.push("copied");
     }
   }
@@ -1320,18 +1505,18 @@ const renderDiffLine = (
 type FoldSegmentMap = Map<number, { endIndex: number; summary: string }>;
 
 const renderRow = (diffHtml: string, panelHtml?: string): string =>
-  `<div class="diff-row"><div class="diff-cell">${diffHtml}</div><div class="info-cell">${panelHtml ?? ""}</div></div>`;
+  `<div class="diff-row"><div class="info-cell">${panelHtml ?? ""}</div><div class="diff-cell">${diffHtml}</div></div>`;
 
 const renderSideBySideRow = (leftHtml: string, rightHtml: string, panelHtml?: string): string =>
-  `<div class="diff-row side-row"><div class="diff-cell left">${leftHtml}</div><div class="diff-cell right">${rightHtml}</div><div class="info-cell">${panelHtml ?? ""}</div></div>`;
+  `<div class="diff-row side-row"><div class="info-cell">${panelHtml ?? ""}</div><div class="diff-cell left">${leftHtml}</div><div class="diff-cell right">${rightHtml}</div></div>`;
 
 const renderSideBySideMetaRow = (metaHtml: string): string =>
-  `<div class="diff-row side-row"><div class="diff-cell span-2">${metaHtml}</div><div class="info-cell"></div></div>`;
+  `<div class="diff-row side-row"><div class="info-cell"></div><div class="diff-cell span-2">${metaHtml}</div></div>`;
 
 const renderSideBySideFoldSummaryRow = (summary: string): string =>
-  `<summary class="diff-row side-row"><span class="diff-cell span-2">${renderFoldSummaryInline(
+  `<summary class="diff-row side-row"><span class="info-cell"></span><span class="diff-cell span-2">${renderFoldSummaryInline(
     summary
-  )}</span><span class="info-cell"></span></summary>`;
+  )}</span></summary>`;
 
 const renderSideBySideLine = (
   line: DiffLine,
@@ -1348,7 +1533,7 @@ const renderSideBySideLine = (
   if (allowCopy) {
     if (copyAccent) {
       classes.push("copy-accent");
-    } else {
+    } else if (!line.hasBgAnsi) {
       classes.push("copied");
     }
   }
