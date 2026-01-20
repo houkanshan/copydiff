@@ -19,8 +19,8 @@ const hashOptions = (options: CacheOptions): string => {
   return hash.digest("hex");
 };
 
-const getCachePath = async (repoRoot: string, headSha: string, options: CacheOptions): Promise<string> => {
-  const cacheDir = path.join(repoRoot, ".git", "copydiff", "cache");
+const getCachePath = async (gitDir: string, headSha: string, options: CacheOptions): Promise<string> => {
+  const cacheDir = path.join(gitDir, "copydiff", "cache");
   await mkdir(cacheDir, { recursive: true });
   const hash = hashOptions(options);
   return path.join(cacheDir, `${headSha}-${hash}.json`);

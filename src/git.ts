@@ -16,6 +16,22 @@ const getRepoRoot = async (): Promise<string> => {
   return output.trim();
 };
 
+const getGitDir = async (): Promise<string> => {
+  const proc = spawn(["git", "rev-parse", "--git-dir"], {
+    stdout: "pipe",
+    stderr: "pipe"
+  });
+  const [output, errorText, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`git rev-parse --git-dir failed: ${errorText.trim()}`);
+  }
+  return output.trim();
+};
+
 const getHeadSha = async (): Promise<string> => {
   const proc = spawn(["git", "rev-parse", "HEAD"], {
     stdout: "pipe",
@@ -93,5 +109,5 @@ const parseGitColorSpec = async (spec: string): Promise<string | undefined> => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-export { getHeadSha, getRepoRoot, parseGitColorSpec, readGitColor, runGitDiff };
+export { getGitDir, getHeadSha, getRepoRoot, parseGitColorSpec, readGitColor, runGitDiff };
 export type { DiffConfigMode };

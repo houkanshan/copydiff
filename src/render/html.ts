@@ -55,6 +55,8 @@ type FileNavEntry = {
   title: string;
   anchor: string;
   status: "changed" | "new" | "deleted" | "moved";
+  addedLines: number;
+  deletedLines: number;
 };
 
 type FileTreeNode = {
@@ -1031,16 +1033,19 @@ main { padding: 16px 0; }
 .diff-file-summary::marker { content: ""; }
 .file-tree { position: fixed; top: 64px; right: 8px; z-index: 6; }
 .file-tree-panel { overflow: hidden; border: 1px solid var(--tree-border); border-radius: 12px; background: var(--tree-bg); box-shadow: 0 12px 28px var(--tree-shadow); width: 320px; }
-.file-tree-panel summary { cursor: pointer; list-style: none; padding: 8px 12px; font-size: 12px; font-weight: 700; color: var(--text); }
+.file-tree-panel summary { cursor: pointer; list-style: none; padding: 8px 12px; font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.file-tree-panel summary::before { content: ""; width: 0; height: 0; border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent var(--text); transition: transform 0.15s ease; flex-shrink: 0; }
+.file-tree-panel[open] > summary::before { transform: rotate(90deg); }
 .file-tree-panel summary::-webkit-details-marker { display: none; }
 .file-tree-panel summary::marker { content: ""; }
-.file-tree-content { max-height: 50vh; overflow: auto; padding: 0 8px 8px; }
+.file-tree-content { max-height: 33vh; overflow: auto; padding: 0 8px 8px; }
 .file-tree-list { list-style: none; margin: 0; padding-left: 0; }
 .file-tree-list .file-tree-list { padding-left: 8px; }
-.file-tree-node > summary { cursor: pointer; list-style: none; color: var(--text); font-weight: 600; font-size: 12px; padding: 4px; }
+.file-tree-node > summary { cursor: pointer; list-style: none; color: var(--text); font-weight: 600; font-size: 12px; padding: 4px; display: flex; align-items: center; gap: 4px; }
+.file-tree-node > summary::before { content: ""; width: 0; height: 0; border-style: solid; border-width: 4px 0 4px 6px; border-color: transparent transparent transparent var(--tree-muted); transition: transform 0.15s ease; flex-shrink: 0; }
 .file-tree-node[open] > summary::before { transform: rotate(90deg); }
 .file-tree-item { margin: 4px 0 4px 4px; }
-.file-tree-item a { color: var(--tree-link); text-decoration: none; font-size: 12px; border-radius: 6px; padding: 2px 4px; }
+.file-tree-item a { color: var(--tree-link); text-decoration: none; font-size: 12px; border-radius: 6px; padding: 2px 4px; display: flex; align-items: center; gap: 0; }
 .file-tree-item a:hover { text-decoration: underline; }
 .file-tree-item a:focus { outline: 2px solid var(--tree-link); outline-offset: 2px; }
 .file-tree-item a[aria-current="location"] { background: var(--tree-active-bg); color: var(--tree-active-text); box-shadow: inset 0 0 0 1px var(--tree-active-border); text-decoration: none; }
@@ -1049,6 +1054,10 @@ main { padding: 16px 0; }
 .file-tree-status.status-new { background: var(--tree-status-new-bg); color: var(--tree-status-new-text); }
 .file-tree-status.status-deleted { background: var(--tree-status-deleted-bg); color: var(--tree-status-deleted-text); }
 .file-tree-status.status-moved { background: var(--tree-status-moved-bg); color: var(--tree-status-moved-text); }
+.file-tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-tree-stats { display: flex; gap: 4px; margin-left: 6px; font-size: 10px; font-weight: 600; flex-shrink: 0; }
+.file-tree-stat-add { color: var(--marker-add); }
+.file-tree-stat-del { color: var(--marker-del); }
 .file-header { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
 .file-toggle { width: 0; height: 0; border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent var(--meta-text); transition: transform 0.15s ease; }
 .diff-file[open] .file-toggle { transform: rotate(90deg); }
@@ -1112,7 +1121,7 @@ body[data-view="side"] .diff-view-side { display: block; }
   main { padding: 16px 0; }
   .file-tree { top: 76px; right: 8px; }
   .file-tree-panel { max-width: min(260px, 70vw); }
-  .file-tree-content { max-height: 50vh; }
+  .file-tree-content { max-height: 33vh; }
   .diff-grid-unified .diff-row { padding-right: 0; display: flex; flex-direction: column; }
   .diff-grid-unified .diff-cell { order: 1; }
   .diff-grid-unified .info-cell { order: 2; }
@@ -1341,11 +1350,24 @@ const buildFileNavEntries = (files: FileDiff[]): FileNavEntry[] =>
     const moved = Boolean(fromPath && toPath && fromPath !== toPath);
     const displayPath = toPath ?? fromPath ?? `file-${index + 1}`;
     const title = moved ? `${fromPath} -> ${toPath}` : displayPath;
+    let addedLines = 0;
+    let deletedLines = 0;
+    file.hunks.forEach((hunk) => {
+      hunk.lines.forEach((line) => {
+        if (line.kind === "add") {
+          addedLines += 1;
+        } else if (line.kind === "del") {
+          deletedLines += 1;
+        }
+      });
+    });
     return {
       path: displayPath,
       title,
       anchor: buildFileAnchorId(displayPath, index),
-      status: resolveFileStatus(file)
+      status: resolveFileStatus(file),
+      addedLines,
+      deletedLines
     };
   });
 
@@ -1440,14 +1462,18 @@ const renderFileTreeList = (node: FileTreeNode): string => {
     }
     const statusLabel = statusLabelMap[entry.status];
     const statusTitle = statusTitleMap[entry.status];
+    const statsHtml =
+      entry.addedLines > 0 || entry.deletedLines > 0
+        ? `<span class="file-tree-stats"><span class="file-tree-stat-add">+${entry.addedLines}</span><span class="file-tree-stat-del">-${entry.deletedLines}</span></span>`
+        : "";
     items.push(
       `<li class="file-tree-item"><a href="#${entry.anchor}" data-file-anchor="${
         entry.anchor
       }" title="${escapeHtml(entry.title)}" aria-label="${escapeHtml(
         `${entry.title} (${statusTitle})`
-      )}"><span class="file-tree-status status-${entry.status}" aria-hidden="true">${statusLabel}</span>${escapeHtml(
+      )}"><span class="file-tree-status status-${entry.status}" aria-hidden="true">${statusLabel}</span><span class="file-tree-name">${escapeHtml(
         child.name
-      )}</a></li>`
+      )}</span>${statsHtml}</a></li>`
     );
   });
   return `<ul class="file-tree-list">${items.join("")}</ul>`;
@@ -1718,17 +1744,8 @@ const renderHtml = async (files: FileDiff[], options: HtmlRenderOptions): Promis
     const fileLabel = stripDiffPrefix(file.toFile) ?? stripDiffPrefix(file.fromFile);
     const fileNav = fileNavEntries[fileIndex];
     const anchorId = fileNav?.anchor ?? buildFileAnchorId(fileLabel ?? `file-${fileIndex + 1}`, fileIndex);
-    let addedLines = 0;
-    let deletedLines = 0;
-    file.hunks.forEach((hunk) => {
-      hunk.lines.forEach((line) => {
-        if (line.kind === "add") {
-          addedLines += 1;
-        } else if (line.kind === "del") {
-          deletedLines += 1;
-        }
-      });
-    });
+    const addedLines = fileNav?.addedLines ?? 0;
+    const deletedLines = fileNav?.deletedLines ?? 0;
     for (const [hunkIndex, hunk] of file.hunks.entries()) {
       const hunkHeader = renderMetaLine(hunk.headerLine);
       unified.push(renderRow(hunkHeader));

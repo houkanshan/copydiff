@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "bun";
 
 import type { CacheOptions } from "../cache";
+import { validateClonePairs } from "./tokenizer";
 
 const getTempDir = async (): Promise<string> => {
   const base = process.env.TMPDIR ?? "/tmp";
@@ -80,6 +81,12 @@ const streamToText = async (
   return text;
 };
 
+const isLineLengthBalanced = (pair: ClonePair): boolean => {
+  const linesA = pair.a.endLine - pair.a.startLine;
+  const linesB = pair.b.endLine - pair.b.startLine;
+  return Math.abs(linesA - linesB) <= Math.max(linesA, linesB) * 0.5;
+};
+
 const normalizeClonePairs = (payload: unknown): ClonePair[] => {
   if (!payload || typeof payload !== "object") {
     return [];
@@ -88,8 +95,8 @@ const normalizeClonePairs = (payload: unknown): ClonePair[] => {
   const duplicates = root.duplicates as
     | Array<{
         lines: number;
-        firstFile?: { name?: string; start?: number; end?: number };
-        secondFile?: { name?: string; start?: number; end?: number };
+        firstFile?: { name?: string; start?: number; end?: number; startLoc?: { line?: number }; endLoc?: { line?: number } };
+        secondFile?: { name?: string; start?: number; end?: number; startLoc?: { line?: number }; endLoc?: { line?: number } };
       }>
     | undefined;
   if (Array.isArray(duplicates)) {
@@ -97,13 +104,17 @@ const normalizeClonePairs = (payload: unknown): ClonePair[] => {
       .map((dup) => {
         const first = dup.firstFile;
         const second = dup.secondFile;
-        if (!first?.name || !second?.name || !first.start || !first.end || !second.start || !second.end) {
+        const firstStart = first?.startLoc?.line ?? first?.start;
+        const firstEnd = first?.endLoc?.line ?? first?.end;
+        const secondStart = second?.startLoc?.line ?? second?.start;
+        const secondEnd = second?.endLoc?.line ?? second?.end;
+        if (!first?.name || !second?.name || !firstStart || !firstEnd || !secondStart || !secondEnd) {
           return undefined;
         }
-        const similarity = dup.lines ? dup.lines / Math.max(first.end - first.start + 1, second.end - second.start + 1) : 1;
+        const similarity = dup.lines ? dup.lines / Math.max(firstEnd - firstStart + 1, secondEnd - secondStart + 1) : 1;
         return {
-          a: { file: first.name, startLine: first.start, endLine: first.end },
-          b: { file: second.name, startLine: second.start, endLine: second.end },
+          a: { file: first.name, startLine: firstStart, endLine: firstEnd },
+          b: { file: second.name, startLine: secondStart, endLine: secondEnd },
           similarity
         } satisfies ClonePair;
       })
@@ -237,11 +248,34 @@ const runJscpd = async (options: JscpdRunOptions): Promise<ClonePair[]> => {
   const data = await readFile(reportPath, "utf8");
   const payload = JSON.parse(data) as unknown;
   await rm(outputDir, { recursive: true, force: true });
-  return normalizeClonePairs(payload).map((pair) => ({
+  const allPairs = normalizeClonePairs(payload).map((pair) => ({
     a: { ...pair.a, file: normalizeClonePath(options.repoRoot, pair.a.file) },
     b: { ...pair.b, file: normalizeClonePath(options.repoRoot, pair.b.file) },
     similarity: pair.similarity
   }));
+  const balancedPairs = allPairs.filter((pair) => {
+    if (isLineLengthBalanced(pair)) {
+      return true;
+    }
+    const linesA = pair.a.endLine - pair.a.startLine;
+    const linesB = pair.b.endLine - pair.b.startLine;
+    logVerbose(
+      options,
+      `filtered clone: ${pair.a.file}:${pair.a.startLine}-${pair.a.endLine} (${linesA} lines) vs ${pair.b.file}:${pair.b.startLine}-${pair.b.endLine} (${linesB} lines) - line count mismatch`
+    );
+    return false;
+  });
+
+  // Apply token-based validation to filter false positives
+  logVerbose(options, `validating ${balancedPairs.length} clone pairs with tokenizer`);
+  const { valid } = await validateClonePairs(balancedPairs, {
+    repoRoot: options.repoRoot,
+    minSimilarity: 0.5,
+    minTokens: options.minTokens,
+    verbose: options.verbose
+  });
+  logVerbose(options, `${valid.length}/${balancedPairs.length} pairs passed token validation`);
+  return valid;
 };
 
 const buildCacheOptions = (options: JscpdCacheOptionsInput): CacheOptions => ({

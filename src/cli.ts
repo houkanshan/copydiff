@@ -6,7 +6,7 @@ import { buildCacheOptions, normalizeClonePath, runJscpd } from "./clone/jscpd";
 import { getCachePath, readCache, writeCache } from "./cache";
 import { parseDiff } from "./diff/parse";
 import type { FileDiff } from "./diff/parse";
-import { getHeadSha, getRepoRoot, parseGitColorSpec, readGitColor, runGitDiff } from "./git";
+import { getGitDir, getHeadSha, getRepoRoot, parseGitColorSpec, readGitColor, runGitDiff } from "./git";
 import type { DiffConfigMode } from "./git";
 import { applyCopyOverlay } from "./overlay";
 import { renderHtml } from "./render/html";
@@ -380,7 +380,7 @@ const run = async (): Promise<number> => {
         options,
         `ignore patterns: ${options.ignore.join(",")} (gitignore on, scan-scope ${options.scanScope})`
       );
-      const headSha = await getHeadSha();
+      const [headSha, gitDir] = await Promise.all([getHeadSha(), getGitDir()]);
       const scanPattern =
         options.scanScope === "changed-types" ? buildPatternFromExtensions(diffExtensions) : undefined;
       if (options.scanScope === "changed-types") {
@@ -402,7 +402,7 @@ const run = async (): Promise<number> => {
       });
       if (options.cache) {
         logVerbose(options, "checking clone cache");
-        const cachePath = await getCachePath(resolvedRepoRoot, headSha, cacheOptions);
+        const cachePath = await getCachePath(gitDir, headSha, cacheOptions);
         const cached = await readCache(cachePath);
           if (cached) {
             logVerbose(options, `using clone cache with ${cached.length} pairs`);
