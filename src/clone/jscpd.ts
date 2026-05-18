@@ -166,13 +166,15 @@ const runJscpd = async (options: JscpdRunOptions): Promise<ClonePair[]> => {
     ".bin",
     process.platform === "win32" ? "jscpd.cmd" : "jscpd"
   );
+  let command: string[];
   try {
     await access(localBin);
+    command = [localBin];
   } catch {
-    logVerbose(options, "jscpd not found in node_modules; bunx may download it");
+    logVerbose(options, "jscpd not found in node_modules; Bun may download it");
+    command = [process.execPath, "x", "jscpd"];
   }
   const args = [
-    "jscpd",
     "--reporters",
     "json",
     "--output",
@@ -194,8 +196,8 @@ const runJscpd = async (options: JscpdRunOptions): Promise<ClonePair[]> => {
   }
 
   args.push(".");
-  logVerbose(options, `running bunx ${args.join(" ")}`);
-  const proc = spawn(["bunx", ...args], {
+  logVerbose(options, `running ${[...command, ...args].join(" ")}`);
+  const proc = spawn([...command, ...args], {
     cwd: options.repoRoot,
     stdout: "pipe",
     stderr: "pipe"
